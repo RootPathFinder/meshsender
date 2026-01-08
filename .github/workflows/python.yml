@@ -24,7 +24,7 @@ jobs:
 
       - name: Run tests
         run: |
-          if [ -d tests ] || ls tests 2>/dev/null | grep -q .; then
+          if [ -f pytest.ini ] || ls tests 2>/dev/null | grep -q .; then
             pytest -q
           else
             echo "No tests found; skipping pytest"
