@@ -489,8 +489,15 @@ def on_ack(packet, interface):
     """Handle ACK messages from receiver"""
     global ack_messages
     try:
+        # Debug: Show all packets
         if 'decoded' in packet:
             decoded = packet['decoded']
+            sender = packet.get('fromId', 'unknown')
+            portnum = decoded.get('portnum', 'unknown')
+            
+            # Debug output for troubleshooting
+            if 'text' in decoded:
+                print(f"\n[DEBUG] Text packet from {sender}: '{decoded.get('text', '')}'")
             
             # Check if it's a text message
             if 'text' in decoded:
