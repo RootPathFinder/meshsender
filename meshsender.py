@@ -503,6 +503,9 @@ def on_receive(packet, interface):
                 
                 if sender in image_buffer:
                     if image_buffer[sender]['crc'] != crc_val:
+                        print(f"\n[!] CRC MISMATCH - New transfer detected from {sender}")
+                        print(f"    Old CRC: {image_buffer[sender]['crc']:08x}, New CRC: {crc_val:08x}")
+                        print(f"    Discarding {sum(1 for x in image_buffer[sender]['chunks'] if x is not None)}/{len(image_buffer[sender]['chunks'])} chunks")
                         del image_buffer[sender]
 
                 if sender not in image_buffer:
@@ -518,6 +521,7 @@ def on_receive(packet, interface):
                     }
                     comp_str = ' (compressed)' if compressed_flag else ''
                     print(f"\n[!] Incoming Image from {sender} ({reported_total_size} bytes{comp_str})")
+                    print(f"    CRC: {crc_val:08x}, Total chunks: {total_chunks}")
                 
                 if image_buffer[sender]['chunks'][chunk_index] is None:
                     image_buffer[sender]['chunks'][chunk_index] = payload
@@ -606,13 +610,16 @@ def send_image(interface, target_id, file_path, res, qual, metadata=None):
         
         print(f"\n[*] SENDING: {file_path}")
         print(f"[*] TOTAL PAYLOAD: {total_size} bytes")
+        print(f"[*] Compressed: {compressed_data is not None}")
         
         crc_val = zlib.crc32(data) & 0xFFFFFFFF
+        print(f"[*] CRC: {crc_val:08x}")
         
         # Try compressing the entire payload
         compressed_data = None
         if COMPRESS_PAYLOAD and total_size > 500:  # Only compress if worth the overhead
             compressed_data = zlib.compress(data, level=9)
+            print(f"[*] Compressed: {len(data)} -> {len(compressed_data)} bytes")
             if len(compressed_data) < total_size * 0.95:  # Only use if >5% savings
                 compression_ratio = (1 - len(compressed_data) / total_size) * 100
                 print(f"[+] Compression: {total_size} -> {len(compressed_data)} bytes ({compression_ratio:.1f}% savings)")
@@ -620,6 +627,10 @@ def send_image(interface, target_id, file_path, res, qual, metadata=None):
                 total_size = len(compressed_data)
                 # Recalculate CRC for compressed data
                 crc_val = zlib.crc32(data) & 0xFFFFFFFF
+                print(f"[+] New CRC after compression: {crc_val:08x}")
+            else:
+                print(f"[-] Compression not beneficial ({len(compressed_data)} >= {total_size * 0.95:.0f}), skipping")
+                compressed_data = None
         
         # Adjust actual_chunk to account for the header (11 bytes now with compression flag)
         actual_chunk = CHUNK_SIZE - 11
