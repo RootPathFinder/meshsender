@@ -28,12 +28,14 @@ def capture_night_image():
     picam2.start()
 
     # 2. Set Manual Gains and Shutter
-    # ExposureTime 1,000,000 = 1 full second
+    # ExposureTime in microseconds: 100000 = 100ms, 500000 = 0.5s
     picam2.set_controls({
-        "AnalogueGain": 10.0,
-        "ExposureTime": 10000,
-        "AwbEnable": False,
-        "ColourGains": (1.2, 0.9)
+        "AnalogueGain": 4.0,        # Reduced from 10.0 to avoid washout
+        "ExposureTime": 200000,      # 200ms exposure (was 10ms)
+        "AwbEnable": True,           # Enable auto white balance
+        "AeEnable": False,           # Disable auto exposure (manual control)
+        "Brightness": 0.0,           # Neutral brightness
+        "Contrast": 1.1              # Slight contrast boost
     })
 
     print("[*] Camera warming up for long exposure...")
