@@ -128,7 +128,23 @@ class GalleryHandler(http.server.SimpleHTTPRequestHandler):
         }
         
         #progress-area {
-            margin-bottom: 40px;
+            margin-bottom: 40px;            min-height: 100px;
+            transition: opacity 0.3s ease;
+        }
+        
+        #progress-area.hidden {
+            opacity: 0;
+            min-height: 0;
+            margin-bottom: 0;
+            pointer-events: none;            min-height: 100px;
+            transition: opacity 0.3s ease;
+        }
+        
+        #progress-area.hidden {
+            opacity: 0;
+            min-height: 0;
+            margin-bottom: 0;
+            pointer-events: none;
         }
         
         .progress-item {
@@ -262,7 +278,11 @@ class GalleryHandler(http.server.SimpleHTTPRequestHandler):
             text-decoration: none;
         }
         
-        .hidden { display: none; }
+        .hidden { 
+            opacity: 0 !important;
+            min-height: 0 !important;
+            margin-bottom: 0 !important;
+        }
         
         @keyframes pulse {
             0%, 100% { opacity: 1; }
@@ -285,20 +305,30 @@ class GalleryHandler(http.server.SimpleHTTPRequestHandler):
         }
     </style>
     <script>
+        let lastProgressHTML = '';
+        
         function updateProgress() {
             fetch('/progress').then(r => r.json()).then(data => {
                 const area = document.getElementById('progress-area');
+                const container = document.getElementById('progress-container');
+                
                 if (data.length === 0) {
                     area.classList.add('hidden');
                     return;
                 }
-                area.classList.remove('hidden');
-                area.innerHTML = '<h2>📥 Incoming Transfers</h2>' + data.map(p => `
-                    <div class="progress-item ${p.status === 'timeout' ? 'timeout' : 'pulsing'}">
+                
+                // Build new HTML  
+                const newHTML = data.map(p => {
+                    const emoji = p.status === 'timeout' ? '&#9888;' : '&#128225;';
+                    const timeoutClass = p.status === 'timeout' ? 'timeout' : 'pulsing';
+                    const badgeClass = p.status === 'timeout' ? 'timeout' : '';
+                    const timeoutLabel = p.status === 'timeout' ? '<span style="font-size:0.75rem; opacity:0.8;"> (TIMED OUT)</span>' : '';
+                    
+                    return `
+                    <div class="progress-item ${timeoutClass}" data-sender="${p.sender}">
                         <div class="progress-header">
-                            <span class="sender-badge ${p.status === 'timeout' ? 'timeout' : ''}">
-                                ${p.status === 'timeout' ? '⚠️' : '📡'} ${p.sender}
-                                ${p.status === 'timeout' ? '<span style="font-size:0.75rem; opacity:0.8;"> (TIMED OUT)</span>' : ''}
+                            <span class="sender-badge ${badgeClass}">
+                                ${emoji} ${p.sender}${timeoutLabel}
                             </span>
                         </div>
                         <div class="progress-stats">
@@ -324,9 +354,19 @@ class GalleryHandler(http.server.SimpleHTTPRequestHandler):
                         </div>
                         <div class="progress-text">${p.percent}%</div>
                     </div>
-                `).join('');
+                    `;
+                }).join('');
+                
+                // Only update if content changed to prevent flashing
+                if (newHTML !== lastProgressHTML) {
+                    container.innerHTML = newHTML;
+                    lastProgressHTML = newHTML;
+                }
+                
+                area.classList.remove('hidden');
             });
         }
+        
         setInterval(updateProgress, 1000);
         updateProgress();
     </script>
@@ -334,11 +374,14 @@ class GalleryHandler(http.server.SimpleHTTPRequestHandler):
 <body>
     <div class="container">
         <header>
-            <h1>📡 Mesh Gallery</h1>
+            <h1>Mesh Gallery</h1>
             <div class="subtitle">Meshtastic Image Receiver</div>
         </header>
         
-        <div id="progress-area" class="hidden"></div>
+        <div id="progress-area" class="hidden">
+            <h2>Incoming Transfers</h2>
+            <div id="progress-container"></div>
+        </div>
         
         <h2>Recent Images</h2>
 """
