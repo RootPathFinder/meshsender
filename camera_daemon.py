@@ -216,47 +216,89 @@ def main():
         print("[X] Failed to initialize camera. Exiting.")
         sys.exit(1)
     
+    # Connection loop with auto-reconnect
+    iface = None
+    motion_thread = None
+    
     try:
-        # Connect to Meshtastic
-        print("\n[*] Connecting to Meshtastic device...")
-        iface = meshtastic.serial_interface.SerialInterface(connectNow=True)
-        print("[+] Connected successfully")
-        
-        # Subscribe to incoming messages
-        pub.subscribe(on_command, "meshtastic.receive")
-        
-        # Send ready broadcast to channel 0
-        my_node = iface.getMyNodeInfo()
-        node_id = my_node.get('user', {}).get('id', 'unknown')
-        ready_msg = f"📷 Trail camera ready | Motion: {'ON' if motion_detection_enabled else 'OFF'} | Node: {node_id}"
-        iface.sendText(ready_msg, channelIndex=0)
-        print(f"[+] Sent ready broadcast to channel 0")
-        
-        # Start motion detection thread
-        motion_thread = threading.Thread(
-            target=motion_detection_loop, 
-            args=(target_id,), 
-            daemon=True
-        )
-        motion_thread.start()
-        
-        print(f"\n[*] Camera daemon active. Waiting for commands...")
-        print(f"[*] Motion detection is currently {'ENABLED' if motion_detection_enabled else 'DISABLED'}")
-        print(f"[*] Send 'MOTION_ON' to enable auto-capture")
-        print(f"[*] Send 'HELP' via mesh to see available commands\n")
-        
-        # Keep alive
         while True:
-            time.sleep(1)
+            try:
+                # Connect/reconnect to Meshtastic
+                if iface is None:
+                    print("\n[*] Connecting to Meshtastic device...")
+                    iface = meshtastic.serial_interface.SerialInterface(connectNow=True)
+                    print("[+] Connected successfully")
+                    
+                    # Subscribe to incoming messages
+                    pub.subscribe(on_command, "meshtastic.receive")
+                    
+                    # Send ready broadcast to channel 0
+                    try:
+                        my_node = iface.getMyNodeInfo()
+                        node_id = my_node.get('user', {}).get('id', 'unknown')
+                        ready_msg = f"📷 Trail camera ready | Motion: {'ON' if motion_detection_enabled else 'OFF'} | Node: {node_id}"
+                        iface.sendText(ready_msg, channelIndex=0)
+                        print(f"[+] Sent ready broadcast to channel 0")
+                    except Exception as e:
+                        print(f"[!] Could not send broadcast: {e}")
+                    
+                    # Start motion detection thread (if not already running)
+                    if motion_thread is None or not motion_thread.is_alive():
+                        motion_thread = threading.Thread(
+                            target=motion_detection_loop, 
+                            args=(target_id,), 
+                            daemon=True
+                        )
+                        motion_thread.start()
+                    
+                    print(f"\n[*] Camera daemon active. Waiting for commands...")
+                    print(f"[*] Motion detection is currently {'ENABLED' if motion_detection_enabled else 'DISABLED'}")
+                    print(f"[*] Send 'MOTION_ON' to enable auto-capture")
+                    print(f"[*] Send 'HELP' via mesh to see available commands\n")
+                
+                # Check connection health
+                time.sleep(5)
+                
+                # Test if interface is still alive
+                if iface and not hasattr(iface, '_timeout'):
+                    # Interface seems dead, trigger reconnect
+                    raise Exception("Interface disconnected")
+                    
+            except KeyboardInterrupt:
+                raise  # Pass through to outer handler
+                
+            except Exception as e:
+                print(f"\n[!] Connection error: {e}")
+                print("[*] Attempting to reconnect in 10 seconds...")
+                
+                # Cleanup old interface
+                if iface:
+                    try:
+                        iface.close()
+                    except:
+                        pass
+                    iface = None
+                
+                time.sleep(10)
     
     except KeyboardInterrupt:
         print("\n\n[*] Shutting down camera daemon...")
+        if iface:
+            try:
+                iface.close()
+            except:
+                pass
         if picam2:
             picam2.stop()
         sys.exit(0)
     
     except Exception as e:
         print(f"\n[X] Fatal error: {e}")
+        if iface:
+            try:
+                iface.close()
+            except:
+                pass
         if picam2:
             picam2.stop()
         sys.exit(1)
