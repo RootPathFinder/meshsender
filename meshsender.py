@@ -33,6 +33,35 @@ class GalleryHandler(http.server.SimpleHTTPRequestHandler):
                 return
             return http.server.SimpleHTTPRequestHandler.do_GET(self)
         
+        if self.path == '/progress':
+            self.send_response(200)
+            self.send_header("Content-type", "application/json")
+            self.end_headers()
+            
+            # Get current transfer status
+            progress_data = []
+            for sender, data in image_buffer.items():
+                received = sum(1 for x in data['chunks'] if x is not None)
+                total = len(data['chunks'])
+                percent = int((received / total) * 100) if total > 0 else 0
+                elapsed = time.time() - data['start']
+                bps = data['bytes'] / elapsed if elapsed > 0 else 0
+                
+                progress_data.append({
+                    'sender': sender,
+                    'percent': percent,
+                    'received': received,
+                    'total': total,
+                    'bytes': data['bytes'],
+                    'total_bytes': data['total_size'],
+                    'speed': f"{bps:.1f} B/s",
+                    'elapsed': f"{elapsed:.1f}s"
+                })
+            
+            import json
+            self.wfile.write(json.dumps(progress_data).encode())
+            return
+        
         if self.path == '/' or self.path == '/index.html':
             self.send_response(200)
             self.send_header("Content-type", "text/html")
@@ -42,8 +71,37 @@ class GalleryHandler(http.server.SimpleHTTPRequestHandler):
             html += "body{font-family:sans-serif; background:#121212; color:white; text-align:center; padding:20px;}"
             html += ".grid{display:grid; grid-template-columns:repeat(auto-fill, minmax(180px, 1fr)); gap:15px;}"
             html += "img{width:100%; border:3px solid #333; border-radius:10px;} .card{background:#1e1e1e; padding:10px; border-radius:10px;}"
-            html += "a{color:#00e5ff; text-decoration:none;}</style></head><body>"
-            html += "<h1>📡 Meshtastic Live Gallery</h1><div class='grid'>"
+            html += "a{color:#00e5ff; text-decoration:none;}"
+            html += "#progress-area{margin:20px auto; max-width:800px; text-align:left;}"
+            html += ".progress-item{background:#1e1e1e; padding:15px; margin:10px 0; border-radius:10px; border:2px solid #00e5ff;}"
+            html += ".progress-bar{background:#333; height:20px; border-radius:5px; overflow:hidden; margin:10px 0;}"
+            html += ".progress-fill{background:linear-gradient(90deg, #00e5ff, #0095ff); height:100%; transition:width 0.3s;}"
+            html += ".hidden{display:none;}"
+            html += "</style>"
+            html += "<script>"
+            html += "function updateProgress(){"
+            html += "  fetch('/progress').then(r=>r.json()).then(data=>{"
+            html += "    const area=document.getElementById('progress-area');"
+            html += "    if(data.length===0){area.innerHTML='<p>No active transfers</p>';area.classList.add('hidden');return;}"
+            html += "    area.classList.remove('hidden');"
+            html += "    area.innerHTML='<h2>📥 Incoming Transfers</h2>'+data.map(p=>"
+            html += "      `<div class='progress-item'>"
+            html += "        <div><strong>From:</strong> ${p.sender}</div>"
+            html += "        <div><strong>Progress:</strong> ${p.received}/${p.total} chunks (${p.percent}%)</div>"
+            html += "        <div class='progress-bar'><div class='progress-fill' style='width:${p.percent}%'></div></div>"
+            html += "        <div><strong>Data:</strong> ${p.bytes}/${p.total_bytes} bytes | <strong>Speed:</strong> ${p.speed} | <strong>Time:</strong> ${p.elapsed}</div>"
+            html += "      </div>`"
+            html += "    ).join('');"
+            html += "  });"
+            html += "}"
+            html += "setInterval(updateProgress, 1000);"
+            html += "updateProgress();"
+            html += "</script>"
+            html += "</head><body>"
+            html += "<h1>📡 Meshtastic Live Gallery</h1>"
+            html += "<div id='progress-area' class='hidden'></div>"
+            html += "<h2>Recent Images</h2>"
+            html += "<div class='grid'>"
             for img in images:
                 html += f"<div class='card'><a href='/{GALLERY_DIR}/{img}'><img src='/{GALLERY_DIR}/{img}'></a><br><small>{img}</small></div>"
             html += "</div></body></html>"
