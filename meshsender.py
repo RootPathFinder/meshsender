@@ -510,6 +510,7 @@ def on_receive(packet, interface):
                         del image_buffer[sender]
                     elif image_buffer[sender]['chunks'][chunk_index] is not None:
                         # Duplicate chunk from same transfer - ignore silently
+                        print(f"  [DUP] Chunk {chunk_index} already received, skipping")
                         return
 
                 if sender not in image_buffer:
@@ -528,6 +529,7 @@ def on_receive(packet, interface):
                     print(f"    CRC: {crc_val:08x}, Total chunks: {total_chunks}")
                 
                 # Store the chunk
+                print(f"  [RCV] Chunk {chunk_index}/{total_chunks-1} ({len(payload)} bytes)")
                 image_buffer[sender]['chunks'][chunk_index] = payload
                 image_buffer[sender]['bytes'] += len(payload)
                 image_buffer[sender]['last_update'] = time.time()
