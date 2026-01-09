@@ -1,53 +1,285 @@
-```markdown
 # Meshsender
 
-A small Python toolset for capturing, sending and receiving images over Meshtastic-enabled LoRa mesh devices.
+A Python toolset for capturing, sending, and receiving images over Meshtastic-enabled LoRa mesh devices.
 
-This project provides:
-- A CLI to send and receive images via a serial-attached Meshtastic node (meshsender.py).
-- A Raspberry Pi camera capture helper that captures an image with Picamera2 and sends it to the mesh (takepic.py).
-- A simple built-in web gallery that serves received images from gallery/.
+## Overview
 
-This README documents installation, usage, internals, and troubleshooting for the repository.
+Meshsender enables image transmission over low-bandwidth LoRa mesh networks by fragmenting JPEG data into small chunks with integrity verification. It includes a command-line interface for sending/receiving images and a Raspberry Pi helper for automated capture and transmission.
 
-Status
-- Prototype (2026). Works for small, optimized thumbnails on low-bandwidth LoRa networks.
-- Includes chunking, CRC integrity checks, ACK handling and a tiny web UI for browsing received images.
+**Status**: Prototype (2026). Optimized for small thumbnails and reliable delivery over constrained LoRa networks.
 
-Quick links
-- CLI: meshsender.py
-- Pi capture & send helper: takepic.py
-- Requirements: requirements.txt
-- License: MIT (LICENSE)
+## Features
 
-Table of contents
-- Features
-- Requirements
-- Installation
-- Usage
-  - Run receiver
-  - Send an image
-  - Capture & send from Raspberry Pi camera
-- Transfer format & tuning
-- Configuration knobs
-- Troubleshooting
-- Systemd service examples
-- Contributing
-- License
+- **Image Fragmentation**: Splits JPEG data into small chunks fitting LoRa payload constraints
+- **Integrity Verification**: CRC32 checksums on full image payload before saving
+- **Acknowledgments**: ACK handling for reliable transmission
+- **Web Gallery**: Built-in HTTP server to browse received images at `http://localhost:5678`
+- **Pi Camera Integration**: Capture high-sensitivity images from Raspberry Pi with long-exposure support
+- **Transfer Metadata**: 10-byte headers with chunk indexing, CRC, and size information
 
-Features
-- Split/fragment JPEG data into small chunks that fit LoRa payload constraints.
-- 10-byte header per chunk (transfer metadata + CRC) for safe reassembly.
-- CRC32 verification of full image before saving.
-- Simple HTTP gallery server to view received images.
-- Picamera2-based example for long-exposure / low-light capture on Raspberry Pi.
+## Requirements
 
-Requirements
-- Hardware:
-  - Meshtastic LoRa devices and a working mesh network (at least one sender and one receiver).
-  - Raspberry Pi camera module for takepic.py (optional).
-- Software:
-  - Python 3.9+
+### Hardware
+
+- **Meshtastic Devices**: At least one LoRa device for sending and one for receiving (or a single device in relay mode)
+- **Serial Connection**: USB connection to Meshtastic device
+- **Raspberry Pi** (optional): For `takepic.py` image capture feature
+
+### Software
+
+- Python 3.9+
+- Dependencies (see Installation)
+
+## Installation
+
+### 1. Clone or download the repository
+
+```bash
+git clone <repository-url>
+cd meshsender
+```
+
+### 2. Install dependencies
+
+```bash
+pip install -r requirements.txt
+```
+
+The following packages will be installed:
+- **meshtastic**: Meshtastic Python API for device communication
+- **Pillow**: Image processing (resize, format conversion, overlay)
+- **PyPubSub**: Event-based message subscription for packet handling
+- **pyserial**: Serial communication with Meshtastic devices
+- **picamera2**: Raspberry Pi camera interface (Linux only)
+
+### 3. Set up Meshtastic device
+
+1. Connect your Meshtastic LoRa device via USB
+2. Ensure the device is properly configured with a working mesh network
+3. Verify connection with: `meshtastic --info`
+
+### 4. Create gallery directory (optional)
+
+The `gallery/` directory is created automatically on first run to store received images.
+
+## Usage
+
+### Receive Mode
+
+Start the receiver on a device connected to your mesh network:
+
+```bash
+python meshsender.py receive
+```
+
+This will:
+- Listen for incoming images on the mesh network
+- Save received images to `gallery/img_<timestamp>.jpg`
+- Start a web server at `http://localhost:5678` displaying the last 20 received images
+- Display transfer progress in the terminal
+
+**Example output:**
+```
+[*] Receiver Active. Web Port: 5678
+[!] Incoming Image from !da56b70c (15234 bytes)
+Progress: [===============>] 100% | 15234/15234B | 2543.0B/s | R:0
+[SUCCESS] 15234 bytes in 6.1s
+```
+
+### Send Mode
+
+Send an image to a specific node:
+
+```bash
+python meshsender.py send <target_node_id> <image_path> [--res <resolution>] [--qual <quality>]
+```
+
+**Parameters:**
+- `target_node_id`: Meshtastic node ID (e.g., `!da56b70c`) or node name
+- `image_path`: Path to the image file (JPEG, PNG, etc.)
+- `--res`: Thumbnail resolution in pixels (default: 80, recommended: 80-720)
+- `--qual`: JPEG quality 1-100 (default: 15, lower = more compression)
+
+**Examples:**
+
+Send a small thumbnail:
+```bash
+python meshsender.py send !da56b70c photo.jpg --res 80 --qual 15
+```
+
+Send a larger preview:
+```bash
+python meshsender.py send !da56b70c photo.jpg --res 320 --qual 40
+```
+
+**Features during send:**
+- Automatically resizes image to target resolution
+- Adds timestamp and compression stats as overlay
+- Shows real-time transfer progress
+- Retries failed chunks automatically
+- Outputs transfer summary (size, duration, average speed)
+
+### Raspberry Pi Camera Capture & Send
+
+Use `takepic.py` to capture images with the Raspberry Pi camera and send them to the mesh:
+
+```bash
+python takepic.py
+```
+
+**Configuration** (edit `takepic.py`):
+
+```python
+TARGET_NODE = "!da56b70c"        # Node ID to send to
+IMAGE_PATH = "/home/dave/small.jpg"  # Where to save captured image
+PYTHON_BIN = "/path/to/python"   # Path to Python executable
+SENDER_SCRIPT = "/path/to/meshsender.py"  # Path to meshsender.py
+RES = "720"                       # Resolution
+QUAL = "70"                       # Quality
+```
+
+**Features:**
+- Captures high-sensitivity images with long exposure (1 second default)
+- Applies manual gain and white balance for low-light scenarios
+- Allows sensor warmup before capture
+- Automatically sends captured image to mesh
+
+**Typical workflow:**
+```bash
+# Capture image with camera and send to mesh in one command
+python takepic.py
+# Output:
+# [*] Camera warming up for long exposure...
+# [*] Capturing image...
+# [+] Image saved to /home/dave/small.jpg
+# [*] Sending to Node: !da56b70c
+# [+] Transmission finished successfully.
+```
+
+## Transfer Configuration & Tuning
+
+### Chunk Size
+
+- **Current Setting**: 200 bytes per chunk (with 10-byte header = 210 bytes total)
+- **Adjustment**: Edit `CHUNK_SIZE` in `meshsender.py` to fit your LoRa MTU
+- **Typical LoRa MTU**: 240-250 bytes
+
+### Image Resolution & Quality
+
+| Resolution | Quality | Size (KB) | Send Time (~6s/chunk) |
+|-----------|---------|----------|----------------------|
+| 80px      | 15      | 1.2      | ~6 seconds           |
+| 160px     | 25      | 3.5      | ~15 seconds          |
+| 320px     | 40      | 8.2      | ~35 seconds          |
+| 720px     | 70      | 25+      | 2+ minutes           |
+
+### Retry Behavior
+
+- Failed packets are automatically retried after 10 seconds
+- ACK handling ensures delivery verification
+- Transfer resumes from failed chunk (no need to restart)
+
+## Configuration Knobs
+
+**meshsender.py:**
+```python
+PORT_NUM = 256          # Meshtastic port number for this app
+CHUNK_SIZE = 200        # Data payload per chunk (bytes)
+WEB_PORT = 5678         # Web gallery server port
+GALLERY_DIR = "gallery" # Directory to store received images
+```
+
+**takepic.py:**
+```python
+TARGET_NODE = "!da56b70c"
+IMAGE_PATH = "/home/dave/small.jpg"
+PYTHON_BIN = "/home/dave/mesh-env/bin/python"
+SENDER_SCRIPT = "/home/dave/meshsender.py"
+RES = "720"
+QUAL = "70"
+```
+
+**Picamera2 settings:**
+- `FrameDurationLimits`: (1000000, 1000000) = 1 FPS for long exposure
+- `AnalogueGain`: 12.0 for low-light sensitivity
+- `ColourGains`: (1.2, 0.9) for white balance
+
+## Troubleshooting
+
+| Issue | Solution |
+|-------|----------|
+| "Connection Error" | Ensure Meshtastic device is connected via USB and `meshtastic --info` works |
+| Slow transfers | Reduce `--res` and `--qual` parameters; check mesh signal quality |
+| Image corruption | Verify CRC errors in output; try reducing chunk size if MTU is exceeded |
+| Web gallery not loading | Check firewall; ensure port 5678 is not in use; try `http://127.0.0.1:5678` |
+| Camera permission denied | Run with `sudo` on Raspberry Pi, or add user to `video` group: `sudo usermod -a -G video $USER` |
+| Picamera2 not found | Ensure you're on Raspberry Pi with Python 3.11+; install: `sudo apt install -y python3-picamera2` |
+
+## Examples
+
+### Monitor receiving gallery live
+
+Terminal 1 (Receiver):
+```bash
+python meshsender.py receive
+# Visit http://localhost:5678 in a browser to see incoming images
+```
+
+Terminal 2 (Sender):
+```bash
+python meshsender.py send !da56b70c sunset.jpg --res 320 --qual 50
+```
+
+### Automated Pi camera with cron
+
+Schedule periodic image captures:
+
+```bash
+# Edit crontab
+crontab -e
+
+# Add this to capture and send every hour
+0 * * * * cd /home/dave/meshsender && python takepic.py >> /tmp/meshsender.log 2>&1
+```
+
+### Systemd service (optional)
+
+Create `/etc/systemd/system/meshsender-receiver.service`:
+
+```ini
+[Unit]
+Description=Meshsender Image Receiver
+After=network.target
+
+[Service]
+Type=simple
+User=meshuser
+WorkingDirectory=/home/meshuser/meshsender
+ExecStart=/usr/bin/python3 /home/meshuser/meshsender/meshsender.py receive
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Enable and start:
+```bash
+sudo systemctl enable meshsender-receiver
+sudo systemctl start meshsender-receiver
+```
+
+## License
+
+MIT License (see [LICENSE](LICENSE))
+
+## Contributing
+
+Contributions welcome! Areas for improvement:
+- Video frame transmission support
+- Compression algorithm optimization
+- Web gallery enhancements
+- Additional platform support (Windows LoRa dongles)
   - Meshtastic Python package
   - Pillow (PIL)
   - PyPubSub
