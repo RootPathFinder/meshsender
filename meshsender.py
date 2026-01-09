@@ -798,7 +798,7 @@ def send_image(interface, target_id, file_path, res, qual, metadata=None):
             draw_progress_bar(i+1, len(chunks), start_time, sent_bytes, total_size, total_retries)
             time.sleep(CHUNK_DELAY)
         
-print(f"\n[*] Initial send complete. Waiting for receiver...")
+        print(f"\n[*] Initial send complete. Waiting for receiver...")
         
         # Wait for receiver to request missing chunks or send OK
         wait_round = 0
