@@ -114,9 +114,16 @@ def motion_detection_loop(target_id):
     global motion_detection_enabled, last_capture_time
     
     print("[*] Motion detection loop started")
+    check_counter = 0
     
     while True:
         time.sleep(0.5)  # Check twice per second
+        check_counter += 1
+        
+        # Show status every 60 seconds
+        if check_counter % 120 == 0:
+            status = "ACTIVE" if motion_detection_enabled else "disabled"
+            print(f"[*] Motion detection: {status}")
         
         if not motion_detection_enabled:
             continue
@@ -218,6 +225,13 @@ def main():
         # Subscribe to incoming messages
         pub.subscribe(on_command, "meshtastic.receive")
         
+        # Send ready broadcast to channel 0
+        my_node = iface.getMyNodeInfo()
+        node_id = my_node.get('user', {}).get('id', 'unknown')
+        ready_msg = f"📷 Trail camera ready | Motion: {'ON' if motion_detection_enabled else 'OFF'} | Node: {node_id}"
+        iface.sendText(ready_msg, channelIndex=0)
+        print(f"[+] Sent ready broadcast to channel 0")
+        
         # Start motion detection thread
         motion_thread = threading.Thread(
             target=motion_detection_loop, 
@@ -227,6 +241,8 @@ def main():
         motion_thread.start()
         
         print(f"\n[*] Camera daemon active. Waiting for commands...")
+        print(f"[*] Motion detection is currently {'ENABLED' if motion_detection_enabled else 'DISABLED'}")
+        print(f"[*] Send 'MOTION_ON' to enable auto-capture")
         print(f"[*] Send 'HELP' via mesh to see available commands\n")
         
         # Keep alive
