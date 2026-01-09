@@ -21,12 +21,18 @@ USE_WEBP = True  # WebP provides ~30% better compression than JPEG
 COMPRESS_PAYLOAD = True  # Compress chunks with zlib (if beneficial)
 CHUNK_DELAY = 4  # Delay between chunks in seconds (reduce for faster send)
 image_buffer = {}
+show_http_logs = True  # Toggle with 'h' key during receive
 
 if not os.path.exists(GALLERY_DIR):
     os.makedirs(GALLERY_DIR)
 
 # --- WEB SERVER LOGIC ---
 class GalleryHandler(http.server.SimpleHTTPRequestHandler):
+    def log_message(self, format, *args):
+        # Only log if toggle is enabled
+        if show_http_logs:
+            http.server.SimpleHTTPRequestHandler.log_message(self, format, *args)
+    
     def do_GET(self):
         if self.path == '/image.jpg':
             images = sorted([f for f in os.listdir(GALLERY_DIR) if f.endswith('.jpg')], reverse=True)
@@ -558,15 +564,22 @@ def on_receive(packet, interface):
                             del image_buffer[sender]
                             return
                     
-                    img = Image.open(io.BytesIO(full))
+                    try:
+                        img = Image.open(io.BytesIO(full))
+                        
+                        # Detect format and save accordingly
+                        img_format = img.format if img.format else 'JPEG'
+                        ext = 'webp' if img_format == 'WEBP' else 'jpg'
+                        fname = f"{GALLERY_DIR}/img_{int(time.time())}.{ext}"
+                        img.save(fname)
+                        duration = time.time() - image_buffer[sender]['start']
+                        print(f"\n[SUCCESS] {len(full)} bytes in {duration:.1f}s")
+                        print(f"[+] Saved to: {fname}")
+                    except Exception as e:
+                        print(f"\n[X] Failed to save image: {e}")
+                        import traceback
+                        traceback.print_exc()
                     
-                    # Detect format and save accordingly
-                    img_format = img.format if img.format else 'JPEG'
-                    ext = 'webp' if img_format == 'WEBP' else 'jpg'
-                    fname = f"{GALLERY_DIR}/img_{int(time.time())}.{ext}"
-                    img.save(fname)
-                    duration = time.time() - image_buffer[sender]['start']
-                    print(f"\n[SUCCESS] {len(full)} bytes in {duration:.1f}s")
                     del image_buffer[sender]
     except Exception as e:
         print(f"\n[!] Receive error: {e}")
@@ -692,6 +705,20 @@ def send_image(interface, target_id, file_path, res, qual, metadata=None):
         print(f"\n[X] Error: {e}")
         traceback.print_exc()
 
+def keyboard_listener():
+    """Listen for keyboard input to toggle HTTP logs"""
+    global show_http_logs
+    print("[*] Press 'h' to toggle HTTP logs")
+    while True:
+        try:
+            key = input()
+            if key.lower() == 'h':
+                show_http_logs = not show_http_logs
+                status = "shown" if show_http_logs else "hidden"
+                print(f"\n[*] HTTP logs now {status}")
+        except:
+            pass
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("mode", choices=["send", "receive"])
@@ -711,6 +738,7 @@ def main():
         
         if args.mode == "receive":
             threading.Thread(target=start_web_server, daemon=True).start()
+            threading.Thread(target=keyboard_listener, daemon=True).start()
             pub.subscribe(on_receive, "meshtastic.receive")
             print(f"[*] Receiver Active. Web Port: {WEB_PORT}")
             while True: time.sleep(1)
