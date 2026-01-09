@@ -510,7 +510,7 @@ def on_receive(packet, interface):
                         del image_buffer[sender]
                     elif image_buffer[sender]['chunks'][chunk_index] is not None:
                         # Duplicate chunk from same transfer - ignore silently
-                        continue
+                        return
 
                 if sender not in image_buffer:
                     image_buffer[sender] = {
