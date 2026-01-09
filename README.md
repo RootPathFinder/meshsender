@@ -104,12 +104,12 @@ python meshsender.py send <target_node_id> <image_path> [--res <resolution>] [--
 
 Send a small thumbnail:
 ```bash
-python meshsender.py send !da56b70c photo.jpg --res 80 --qual 15
+python meshsender.py send '!da56b70c' photo.jpg --res 80 --qual 15
 ```
 
 Send a larger preview:
 ```bash
-python meshsender.py send !da56b70c photo.jpg --res 320 --qual 40
+python meshsender.py send '!da56b70c' photo.jpg --res 320 --qual 40
 ```
 
 **Features during send:**
@@ -131,12 +131,18 @@ python takepic.py
 
 ```python
 TARGET_NODE = "!da56b70c"        # Node ID to send to
-IMAGE_PATH = "/home/dave/small.jpg"  # Where to save captured image
-PYTHON_BIN = "/path/to/python"   # Path to Python executable
-SENDER_SCRIPT = "/path/to/meshsender.py"  # Path to meshsender.py
-RES = "720"                       # Resolution
-QUAL = "70"                       # Quality
+# Paths are relative to the script location
+IMAGE_PATH = os.path.join(SCRIPT_DIR, "captured_image.jpg")  # Saved image
+SENDER_SCRIPT = os.path.join(SCRIPT_DIR, "meshsender.py")    # meshsender.py
+PYTHON_BIN = sys.executable     # Current Python interpreter
+RES = "720"                      # Resolution
+QUAL = "70"                      # Quality
 ```
+
+**Note**: By default:
+- Images are saved to `captured_image.jpg` in the same directory as the script
+- Uses the current Python interpreter automatically (no need to configure paths)
+- `meshsender.py` is expected in the same directory as `takepic.py`
 
 **Features:**
 - Captures high-sensitivity images with long exposure (1 second default)
@@ -151,7 +157,7 @@ python takepic.py
 # Output:
 # [*] Camera warming up for long exposure...
 # [*] Capturing image...
-# [+] Image saved to /home/dave/small.jpg
+# [+] Image saved to captured_image.jpg
 # [*] Sending to Node: !da56b70c
 # [+] Transmission finished successfully.
 ```
@@ -227,7 +233,7 @@ python meshsender.py receive
 
 Terminal 2 (Sender):
 ```bash
-python meshsender.py send !da56b70c sunset.jpg --res 320 --qual 50
+python meshsender.py send '!da56b70c' sunset.jpg --res 320 --qual 50
 ```
 
 ### Automated Pi camera with cron

@@ -1,12 +1,22 @@
 import time
 import subprocess
+import sys
+import os
 from picamera2 import Picamera2
 
 # --- CONFIGURATION ---
 TARGET_NODE = "!da56b70c"
-IMAGE_PATH = "/home/dave/small.jpg"
-PYTHON_BIN = "/home/dave/mesh-env/bin/python"
-SENDER_SCRIPT = "/home/dave/meshsender.py"
+
+# Get the directory where this script is located
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# Relative paths (can be customized as needed)
+IMAGE_PATH = os.path.join(SCRIPT_DIR, "captured_image.jpg")
+SENDER_SCRIPT = os.path.join(SCRIPT_DIR, "meshsender.py")
+
+# Use the current Python interpreter
+PYTHON_BIN = sys.executable
+
 RES = "720"
 QUAL = "70"
 
