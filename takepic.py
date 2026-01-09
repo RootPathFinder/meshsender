@@ -32,7 +32,8 @@ def capture_night_image():
     picam2.set_controls({
         "AnalogueGain": 4.0,        # Reduced from 10.0 to avoid washout
         "ExposureTime": 200000,      # 200ms exposure (was 10ms)
-        "AwbEnable": True,           # Enable auto white balance
+        "AwbEnable": False,          # Manual white balance to fix blue tint
+        "ColourGains": (2.5, 1.2),   # Red boost, blue reduction
         "AeEnable": False,           # Disable auto exposure (manual control)
         "Brightness": 0.0,           # Neutral brightness
         "Contrast": 1.1              # Slight contrast boost
