@@ -21,6 +21,7 @@ USE_WEBP = True  # WebP provides ~30% better compression than JPEG
 COMPRESS_PAYLOAD = True  # Compress chunks with zlib (if beneficial)
 CHUNK_DELAY = 4  # Delay between chunks in seconds (reduce for faster send)
 image_buffer = {}
+ack_messages = {}  # Store ACK messages from receivers: {sender_id: {transfer_id: [chunk_indices]}}
 
 if not os.path.exists(GALLERY_DIR):
     os.makedirs(GALLERY_DIR)
@@ -483,6 +484,37 @@ def add_diagnostic_overlay(img, stats_text, metadata=None):
     return img.convert("RGB")
 
 # --- MESH LOGIC ---
+def on_ack(packet, interface):
+    """Handle ACK messages from receiver"""
+    global ack_messages
+    try:
+        if 'decoded' in packet and 'text' in packet['decoded']:
+            text = packet['decoded']['text']
+            sender = packet.get('fromId', 'unknown')
+            
+            # Parse ACK messages: "ACK:transfer_id:chunk,list" or "OK:transfer_id"
+            if text.startswith('ACK:'):
+                parts = text.split(':')
+                if len(parts) >= 3:
+                    transfer_id = int(parts[1], 16)
+                    chunk_list = [int(x) for x in parts[2].split(',') if x]
+                    
+                    if sender not in ack_messages:
+                        ack_messages[sender] = {}
+                    ack_messages[sender][transfer_id] = chunk_list
+                    print(f"\n[ACK] Received from {sender}: {len(chunk_list)} chunks for transfer {transfer_id:08x}")
+            
+            elif text.startswith('OK:'):
+                parts = text.split(':')
+                if len(parts) >= 2:
+                    transfer_id = int(parts[1], 16)
+                    if sender not in ack_messages:
+                        ack_messages[sender] = {}
+                    ack_messages[sender][transfer_id] = 'COMPLETE'
+                    print(f"\n[OK] Transfer {transfer_id:08x} confirmed complete by {sender}")
+    except Exception as e:
+        pass  # Ignore parsing errors
+
 def on_receive(packet, interface):
     global image_buffer
     try:
@@ -492,33 +524,35 @@ def on_receive(packet, interface):
                 data = decoded.get('payload')
                 
                 # Header Structure:
-                # [0]: Total Chunks (1 byte)
-                # [1]: Chunk Index (1 byte)
-                # [2]: Compressed Flag (1 byte)
-                # [3-6]: CRC32 (4 bytes)
-                # [7-10]: Total Byte Size (4 bytes)
-                total_chunks = data[0]
-                chunk_index = data[1]
-                compressed_flag = data[2] if len(data) > 10 else 0
-                crc_val = int.from_bytes(data[3:7], byteorder='big')
-                reported_total_size = int.from_bytes(data[7:11], byteorder='big')
-                payload = data[11:]
+                # [0-3]: Transfer ID (4 bytes)
+                # [4]: Total Chunks (1 byte)
+                # [5]: Chunk Index (1 byte)
+                # [6]: Compressed Flag (1 byte)
+                # [7-10]: CRC32 (4 bytes)
+                # [11-14]: Total Byte Size (4 bytes)
+                transfer_id = int.from_bytes(data[0:4], byteorder='big')
+                total_chunks = data[4]
+                chunk_index = data[5]
+                compressed_flag = data[6] if len(data) > 14 else 0
+                crc_val = int.from_bytes(data[7:11], byteorder='big')
+                reported_total_size = int.from_bytes(data[11:15], byteorder='big')
+                payload = data[15:]
                 sender = packet.get('fromId', 'unknown')
+                buffer_key = f"{sender}_{transfer_id}"
                 
-                # Always check CRC - if different, it's a new transfer
-                if sender in image_buffer:
-                    if image_buffer[sender]['crc'] != crc_val:
-                        print(f"\n[!] CRC MISMATCH - New transfer detected from {sender}")
-                        print(f"    Old CRC: {image_buffer[sender]['crc']:08x}, New CRC: {crc_val:08x}")
-                        print(f"    Discarding {sum(1 for x in image_buffer[sender]['chunks'] if x is not None)}/{len(image_buffer[sender]['chunks'])} chunks")
-                        del image_buffer[sender]
-                    elif image_buffer[sender]['chunks'][chunk_index] is not None:
-                        # Duplicate chunk from same transfer - ignore silently
-                        print(f"  [DUP] Chunk {chunk_index} already received, skipping")
-                        return
-
-                if sender not in image_buffer:
-                    image_buffer[sender] = {
+                # Check if this is a new transfer
+                if buffer_key not in image_buffer:
+                    # Clean up old transfers from this sender
+                    old_keys = [k for k in image_buffer.keys() if k.startswith(sender + '_')]
+                    if old_keys:
+                        for old_key in old_keys:
+                            old_chunks = sum(1 for x in image_buffer[old_key]['chunks'] if x is not None)
+                            print(f"\n[!] Discarding old transfer {old_key} ({old_chunks}/{len(image_buffer[old_key]['chunks'])} chunks)")
+                            del image_buffer[old_key]
+                    
+                    image_buffer[buffer_key] = {
+                        'sender': sender,
+                        'transfer_id': transfer_id,
                         'chunks': [None]*total_chunks, 
                         'start': time.time(), 
                         'last_update': time.time(),
@@ -529,37 +563,46 @@ def on_receive(packet, interface):
                         'compressed': bool(compressed_flag)
                     }
                     comp_str = ' (compressed)' if compressed_flag else ''
-                    print(f"\n[!] Incoming Image from {sender} ({reported_total_size} bytes{comp_str})")
-                    print(f"    CRC: {crc_val:08x}, Total chunks: {total_chunks}")
+                    print(f"\n[!] Incoming Image from {sender} (ID: {transfer_id:08x}, {reported_total_size} bytes{comp_str})")
+                    print(f"    Total chunks: {total_chunks}")
                 
-                # Store the chunk
-                print(f"  [RCV] Chunk {chunk_index}/{total_chunks-1} ({len(payload)} bytes)")
-                image_buffer[sender]['chunks'][chunk_index] = payload
-                image_buffer[sender]['bytes'] += len(payload)
-                image_buffer[sender]['last_update'] = time.time()
-                image_buffer[sender]['status'] = 'active'
+                # Store the chunk (allow overwrites for retransmissions)
+                if image_buffer[buffer_key]['chunks'][chunk_index] is None:
+                    print(f"  [RCV] Chunk {chunk_index}/{total_chunks-1} ({len(payload)} bytes)")
+                    image_buffer[buffer_key]['bytes'] += len(payload)
+                else:
+                    print(f"  [RETRY] Chunk {chunk_index}/{total_chunks-1} ({len(payload)} bytes)")
                 
-                count = sum(1 for x in image_buffer[sender]['chunks'] if x is not None)
-                draw_progress_bar(count, total_chunks, image_buffer[sender]['start'], image_buffer[sender]['bytes'], image_buffer[sender]['total_size'])
+                image_buffer[buffer_key]['chunks'][chunk_index] = payload
+                image_buffer[buffer_key]['last_update'] = time.time()
+                image_buffer[buffer_key]['status'] = 'active'
+                
+                count = sum(1 for x in image_buffer[buffer_key]['chunks'] if x is not None)
+                draw_progress_bar(count, total_chunks, image_buffer[buffer_key]['start'], image_buffer[buffer_key]['bytes'], image_buffer[buffer_key]['total_size'])
 
-                if None not in image_buffer[sender]['chunks']:
+                # Send ACK back to sender with received chunk list
+                received_indices = [i for i, c in enumerate(image_buffer[buffer_key]['chunks']) if c is not None]
+                ack_msg = f"ACK:{transfer_id:08x}:{','.join(map(str, received_indices))}"
+                interface.sendText(ack_msg, destinationId=sender, portNum=PORT_NUM)
+
+                if None not in image_buffer[buffer_key]['chunks']:
                     print(f"\n[+] All {total_chunks} chunks received!")
-                    full = b"".join(image_buffer[sender]['chunks'])
+                    full = b"".join(image_buffer[buffer_key]['chunks'])
                     
                     # Verify CRC on assembled chunks BEFORE decompressing
-                    if zlib.crc32(full) & 0xFFFFFFFF != image_buffer[sender]['crc']:
+                    if zlib.crc32(full) & 0xFFFFFFFF != image_buffer[buffer_key]['crc']:
                         print(f"\n[X] CRC mismatch! Image corrupted.")
-                        del image_buffer[sender]
+                        del image_buffer[buffer_key]
                         return
                     
                     # Decompress if needed (AFTER CRC check)
-                    if image_buffer[sender].get('compressed', False):
+                    if image_buffer[buffer_key].get('compressed', False):
                         try:
                             full = zlib.decompress(full)
                             print(f"\n[+] Decompressed payload")
                         except Exception as e:
                             print(f"\n[X] Decompression failed: {e}")
-                            del image_buffer[sender]
+                            del image_buffer[buffer_key]
                             return
                     
                     try:
@@ -570,15 +613,20 @@ def on_receive(packet, interface):
                         ext = 'webp' if img_format == 'WEBP' else 'jpg'
                         fname = f"{GALLERY_DIR}/img_{int(time.time())}.{ext}"
                         img.save(fname)
-                        duration = time.time() - image_buffer[sender]['start']
+                        duration = time.time() - image_buffer[buffer_key]['start']
                         print(f"\n[SUCCESS] {len(full)} bytes in {duration:.1f}s")
                         print(f"[+] Saved to: {fname}")
+                        
+                        # Send OK confirmation to sender
+                        ok_msg = f"OK:{transfer_id:08x}"
+                        interface.sendText(ok_msg, destinationId=sender, portNum=PORT_NUM)
+                        print(f"[+] Sent OK confirmation to {sender}")
                     except Exception as e:
                         print(f"\n[X] Failed to save image: {e}")
                         import traceback
                         traceback.print_exc()
                     
-                    del image_buffer[sender]
+                    del image_buffer[buffer_key]
     except Exception as e:
         print(f"\n[!] Receive error: {e}")
 
@@ -625,7 +673,11 @@ def send_image(interface, target_id, file_path, res, qual, metadata=None):
         data = buf.getvalue()
         total_size = len(data)
         
+        # Generate unique transfer ID
+        transfer_id = int(time.time() * 1000) & 0xFFFFFFFF
+        
         print(f"\n[*] SENDING: {file_path}")
+        print(f"[*] Transfer ID: {transfer_id:08x}")
         print(f"[*] TOTAL PAYLOAD: {total_size} bytes")
         
         crc_val = zlib.crc32(data) & 0xFFFFFFFF
@@ -648,8 +700,8 @@ def send_image(interface, target_id, file_path, res, qual, metadata=None):
                 print(f"[-] Compression not beneficial ({len(compressed_data)} >= {total_size * 0.95:.0f}), skipping")
                 compressed_data = None
         
-        # Adjust actual_chunk to account for the header (11 bytes now with compression flag)
-        actual_chunk = CHUNK_SIZE - 11
+        # Adjust actual_chunk to account for the header (15 bytes: transfer_id(4) + metadata(11))
+        actual_chunk = CHUNK_SIZE - 15
         chunks = [data[i:i + actual_chunk] for i in range(0, total_size, actual_chunk)]
         
         print(f"[*] Creating {len(chunks)} chunks of {actual_chunk} bytes each")
@@ -657,11 +709,12 @@ def send_image(interface, target_id, file_path, res, qual, metadata=None):
         
         start_time = time.time()
         total_retries = 0
+        ack_received = set()  # Track which chunks have been acknowledged
 
         for i, chunk in enumerate(chunks):
-            # Construct Header: Chunks(1) + Index(1) + Compressed(1) + CRC(4) + TotalSize(4)
+            # Construct Header: TransferID(4) + TotalChunks(1) + Index(1) + Compressed(1) + CRC(4) + TotalSize(4)
             compressed_flag = 1 if compressed_data else 0
-            header = bytes([len(chunks), i, compressed_flag]) + crc_val.to_bytes(4, 'big') + total_size.to_bytes(4, 'big')
+            header = transfer_id.to_bytes(4, 'big') + bytes([len(chunks), i, compressed_flag]) + crc_val.to_bytes(4, 'big') + total_size.to_bytes(4, 'big')
             p_data = header + chunk
             
             success = False
@@ -687,7 +740,57 @@ def send_image(interface, target_id, file_path, res, qual, metadata=None):
             sent_bytes = sum(len(c) for c in chunks[:i+1])
             draw_progress_bar(i+1, len(chunks), start_time, sent_bytes, total_size, total_retries)
             time.sleep(CHUNK_DELAY)
+        
+        print(f"\n[*] Initial send complete. Waiting for receiver confirmation...")
+        
+        # Wait for receiver to report status and retransmit missing chunks
+        retry_round = 0
+        max_retry_rounds = 5
+        transfer_complete = False
+        
+        while retry_round < max_retry_rounds and not transfer_complete:
+            time.sleep(8)  # Wait for receiver to send ACK
             
+            # Check if we got ACK from target
+            if target_id in ack_messages and transfer_id in ack_messages[target_id]:
+                status = ack_messages[target_id][transfer_id]
+                
+                if status == 'COMPLETE':
+                    print(f"\n[✓] Transfer confirmed complete by receiver!")
+                    transfer_complete = True
+                    break
+                
+                # status is a list of received chunk indices
+                received_chunks = set(status)
+                missing_chunks = [i for i in range(len(chunks)) if i not in received_chunks]
+                
+                if not missing_chunks:
+                    print(f"\n[*] All chunks received by receiver, waiting for OK...")
+                else:
+                    print(f"\n[*] Retransmitting {len(missing_chunks)} missing chunks: {missing_chunks[:10]}{'...' if len(missing_chunks) > 10 else ''}")
+                    
+                    for chunk_idx in missing_chunks:
+                        chunk = chunks[chunk_idx]
+                        compressed_flag = 1 if compressed_data else 0
+                        header = transfer_id.to_bytes(4, 'big') + bytes([len(chunks), chunk_idx, compressed_flag]) + crc_val.to_bytes(4, 'big') + total_size.to_bytes(4, 'big')
+                        p_data = header + chunk
+                        
+                        try:
+                            interface.sendData(p_data, destinationId=target_id, portNum=PORT_NUM, wantAck=True)
+                            total_retries += 1
+                            print(f"  [RETRY] Sent chunk {chunk_idx}/{len(chunks)-1}")
+                        except Exception as e:
+                            print(f"  [!] Failed to resend chunk {chunk_idx}: {e}")
+                        
+                        time.sleep(CHUNK_DELAY)
+            else:
+                print(f"\n[*] No ACK yet from receiver (attempt {retry_round + 1}/{max_retry_rounds})...")
+            
+            retry_round += 1
+        
+        if not transfer_complete:
+            print(f"\n[!] Transfer may be incomplete (no OK confirmation received)")
+        
         duration = time.time() - start_time
         avg_speed = total_size / duration
         print(f"\n\n--- TRANSFER SUMMARY ---")
@@ -726,6 +829,9 @@ def main():
             print(f"[*] Receiver Active. Web Port: {WEB_PORT}")
             while True: time.sleep(1)
         elif args.mode == "send":
+            # Subscribe to receive ACK messages
+            pub.subscribe(on_ack, "meshtastic.receive")
+            
             # Check if metadata file exists
             metadata = None
             metadata_file = args.file + '.meta'
