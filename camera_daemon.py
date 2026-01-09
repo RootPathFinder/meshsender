@@ -47,17 +47,30 @@ def initialize_camera():
 
 def capture_and_send(target_id, reason="command"):
     """Trigger a capture and send via takepic.py"""
-    global last_capture_time
+    global last_capture_time, picam2, last_frame
     
     print(f"\n[*] Triggering capture ({reason})...")
     last_capture_time = time.time()
     
     try:
+        # Release camera for takepic.py to use
+        if picam2:
+            print("[*] Releasing camera...")
+            picam2.stop()
+            picam2.close()
+            picam2 = None
+            last_frame = None
+            time.sleep(1)  # Give camera time to fully release
+        
         # Call takepic.py to capture and send (show output in real-time)
         cmd = [PYTHON_BIN, TAKEPIC_SCRIPT, target_id, "--res", "720", "--qual", "70"]
         print(f"[*] Running: {' '.join(cmd)}")
         
         result = subprocess.run(cmd, timeout=300)
+        
+        # Reinitialize camera for motion detection
+        print("[*] Reinitializing camera...")
+        initialize_camera()
         
         if result.returncode == 0:
             print(f"[+] Capture and send completed successfully")
@@ -67,9 +80,11 @@ def capture_and_send(target_id, reason="command"):
             return False
     except subprocess.TimeoutExpired:
         print(f"[X] Capture timed out after 300 seconds")
+        initialize_camera()  # Ensure camera restarts even on timeout
         return False
     except Exception as e:
         print(f"[X] Capture error: {e}")
+        initialize_camera()  # Ensure camera restarts even on error
         return False
 
 def detect_motion():
