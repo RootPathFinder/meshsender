@@ -29,6 +29,7 @@ last_capture_time = 0
 motion_cooldown = 30  # Seconds between motion-triggered captures
 picam2 = None
 last_frame = None
+iface = None  # Global Meshtastic interface
 
 def initialize_camera():
     """Initialize camera for motion detection"""
@@ -49,7 +50,7 @@ def initialize_camera():
 
 def capture_and_send(target_id, reason="command"):
     """Trigger a capture and send via takepic.py"""
-    global last_capture_time, picam2, last_frame
+    global last_capture_time, picam2, last_frame, iface
     
     print(f"\n[*] Triggering capture ({reason})...")
     last_capture_time = time.time()
@@ -76,19 +77,31 @@ def capture_and_send(target_id, reason="command"):
             return False
         
         # Now send the image using daemon's Meshtastic interface
+        if not iface:
+            print(f"[X] No Meshtastic interface available")
+            initialize_camera()
+            return False
+            
         print(f"[*] Sending to {target_id}...")
-        send_cmd = [PYTHON_BIN, SENDER_SCRIPT, "send", target_id, IMAGE_PATH, "--res", "720", "--qual", "70"]
-        send_result = subprocess.run(send_cmd, timeout=300)
+        
+        # Import and use send_image from meshsender
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("meshsender", SENDER_SCRIPT)
+        meshsender = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(meshsender)
+        
+        # Send using daemon's interface
+        success = meshsender.send_image(iface, target_id, IMAGE_PATH, res="720", qual="70")
         
         # Reinitialize camera for motion detection
         print("[*] Reinitializing camera...")
         initialize_camera()
         
-        if send_result.returncode == 0:
+        if success:
             print(f"[+] Capture and send completed successfully")
             return True
         else:
-            print(f"[X] Send failed with exit code: {send_result.returncode}")
+            print(f"[X] Send failed")
             return False
     except subprocess.TimeoutExpired:
         print(f"[X] Process timed out after 300 seconds")
@@ -96,6 +109,8 @@ def capture_and_send(target_id, reason="command"):
         return False
     except Exception as e:
         print(f"[X] Capture error: {e}")
+        import traceback
+        traceback.print_exc()
         initialize_camera()  # Ensure camera restarts even on error
         return False
 
@@ -221,7 +236,7 @@ def on_command(packet, interface):
         print(f"[!] Command handler error: {e}")
 
 def main():
-    global start_time
+    global start_time, iface
     
     if len(sys.argv) < 2:
         print("Usage: camera_daemon.py <default_target_id>")
@@ -249,7 +264,6 @@ def main():
         sys.exit(1)
     
     # Connection loop with auto-reconnect
-    iface = None
     motion_thread = None
     
     try:
