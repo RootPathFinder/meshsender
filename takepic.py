@@ -30,8 +30,8 @@ def capture_night_image():
     # 2. Set Manual Gains and Shutter
     # ExposureTime 1,000,000 = 1 full second
     picam2.set_controls({
-        "AnalogueGain": 12.0,
-       # "ExposureTime": 10000,
+        "AnalogueGain": 10.0,
+        "ExposureTime": 10000,
         "AwbEnable": False,
         "ColourGains": (1.2, 0.9)
     })
