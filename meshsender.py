@@ -810,19 +810,19 @@ def send_image(interface, target_id, file_path, res, qual, metadata=None):
                     continue
                 
                 print(f"\n[*] Retransmitting {len(missing_chunks)} missing chunks: {missing_chunks[:10]}{'...' if len(missing_chunks) > 10 else ''}")
+                
+                for chunk_idx in missing_chunks:
+                    chunk = chunks[chunk_idx]
+                    compressed_flag = 1 if compressed_data else 0
+                    header = transfer_id.to_bytes(4, 'big') + bytes([len(chunks), chunk_idx, compressed_flag]) + crc_val.to_bytes(4, 'big') + total_size.to_bytes(4, 'big')
+                    p_data = header + chunk
                     
-                    for chunk_idx in missing_chunks:
-                        chunk = chunks[chunk_idx]
-                        compressed_flag = 1 if compressed_data else 0
-                        header = transfer_id.to_bytes(4, 'big') + bytes([len(chunks), chunk_idx, compressed_flag]) + crc_val.to_bytes(4, 'big') + total_size.to_bytes(4, 'big')
-                        p_data = header + chunk
-                        
-                        try:
-                            interface.sendData(p_data, destinationId=target_id, portNum=PORT_NUM, wantAck=True)
-                            total_retries += 1
-                            print(f"  [RETRY] Sent chunk {chunk_idx}/{len(chunks)-1}")
-                        except Exception as e:
-                            print(f"  [!] Failed to resend chunk {chunk_idx}: {e}")
+                    try:
+                        interface.sendData(p_data, destinationId=target_id, portNum=PORT_NUM, wantAck=True)
+                        total_retries += 1
+                        print(f"  [RETRY] Sent chunk {chunk_idx}/{len(chunks)-1}")
+                    except Exception as e:
+                        print(f"  [!] Failed to resend chunk {chunk_idx}: {e}")
                         
                         time.sleep(CHUNK_DELAY)
             else:
