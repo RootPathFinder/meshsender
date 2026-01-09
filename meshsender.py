@@ -17,6 +17,9 @@ PORT_NUM = 256
 CHUNK_SIZE = 200 
 WEB_PORT = 5678
 GALLERY_DIR = "gallery"
+USE_WEBP = True  # WebP provides ~30% better compression than JPEG
+COMPRESS_PAYLOAD = True  # Compress chunks with zlib (if beneficial)
+CHUNK_DELAY = 4  # Delay between chunks in seconds (reduce for faster send)
 image_buffer = {}
 
 if not os.path.exists(GALLERY_DIR):
@@ -471,16 +474,18 @@ def on_receive(packet, interface):
             if decoded.get('portnum') == PORT_NUM or decoded.get('portnum') == 'PRIVATE_APP':
                 data = decoded.get('payload')
                 
-                # New Header Structure:
+                # Header Structure:
                 # [0]: Total Chunks (1 byte)
                 # [1]: Chunk Index (1 byte)
-                # [2-5]: CRC32 (4 bytes)
-                # [6-9]: Total Byte Size (4 bytes)
+                # [2]: Compressed Flag (1 byte)
+                # [3-6]: CRC32 (4 bytes)
+                # [7-10]: Total Byte Size (4 bytes)
                 total_chunks = data[0]
                 chunk_index = data[1]
-                crc_val = int.from_bytes(data[2:6], byteorder='big')
-                reported_total_size = int.from_bytes(data[6:10], byteorder='big')
-                payload = data[10:]
+                compressed_flag = data[2] if len(data) > 10 else 0
+                crc_val = int.from_bytes(data[3:7], byteorder='big')
+                reported_total_size = int.from_bytes(data[7:11], byteorder='big')
+                payload = data[11:]
                 sender = packet.get('fromId', 'unknown')
                 
                 if sender in image_buffer:
@@ -495,9 +500,11 @@ def on_receive(packet, interface):
                         'crc': crc_val, 
                         'bytes': 0,
                         'total_size': reported_total_size,
-                        'status': 'active'
+                        'status': 'active',
+                        'compressed': bool(compressed_flag)
                     }
-                    print(f"\n[!] Incoming Image from {sender} ({reported_total_size} bytes)")
+                    comp_str = ' (compressed)' if compressed_flag else ''
+                    print(f"\n[!] Incoming Image from {sender} ({reported_total_size} bytes{comp_str})")
                 
                 if image_buffer[sender]['chunks'][chunk_index] is None:
                     image_buffer[sender]['chunks'][chunk_index] = payload
@@ -510,9 +517,24 @@ def on_receive(packet, interface):
 
                 if None not in image_buffer[sender]['chunks']:
                     full = b"".join(image_buffer[sender]['chunks'])
+                    
+                    # Decompress if needed
+                    if image_buffer[sender].get('compressed', False):
+                        try:
+                            full = zlib.decompress(full)
+                            print(f"\n[+] Decompressed payload")
+                        except Exception as e:
+                            print(f"\n[X] Decompression failed: {e}")
+                            del image_buffer[sender]
+                            return
+                    
                     if zlib.crc32(full) & 0xFFFFFFFF == image_buffer[sender]['crc']:
                         img = Image.open(io.BytesIO(full))
-                        fname = f"{GALLERY_DIR}/img_{int(time.time())}.jpg"
+                        
+                        # Detect format and save accordingly
+                        img_format = img.format if img.format else 'JPEG'
+                        ext = 'webp' if img_format == 'WEBP' else 'jpg'
+                        fname = f"{GALLERY_DIR}/img_{int(time.time())}.{ext}"
                         img.save(fname)
                         duration = time.time() - image_buffer[sender]['start']
                         print(f"\n[SUCCESS] {len(full)} bytes in {duration:.1f}s")
@@ -527,15 +549,41 @@ def send_image(interface, target_id, file_path, res, qual, metadata=None):
         img = Image.open(file_path)
         img.thumbnail((res, res)) 
         
-        tmp = io.BytesIO()
-        img.save(tmp, format='JPEG', quality=qual)
-        size_kb = len(tmp.getvalue()) / 1024
+        # Determine best format
+        use_webp = USE_WEBP
         
-        stats_info = f"{res}px {qual}Q {size_kb:.1f}KB"
+        # Try both formats and pick the smaller one
+        tmp_jpeg = io.BytesIO()
+        img.save(tmp_jpeg, format='JPEG', quality=qual, optimize=True, progressive=True)
+        jpeg_size = len(tmp_jpeg.getvalue())
+        
+        if use_webp:
+            tmp_webp = io.BytesIO()
+            img.save(tmp_webp, format='WEBP', quality=qual, method=6)  # method=6 is slower but better compression
+            webp_size = len(tmp_webp.getvalue())
+            
+            if webp_size < jpeg_size:
+                format_name = 'WEBP'
+                size_kb = webp_size / 1024
+                print(f"[+] WebP is {((jpeg_size-webp_size)/jpeg_size*100):.1f}% smaller than JPEG")
+            else:
+                format_name = 'JPEG'
+                size_kb = jpeg_size / 1024
+                use_webp = False
+        else:
+            format_name = 'JPEG'
+            size_kb = jpeg_size / 1024
+        
+        stats_info = f"{res}px {qual}Q {size_kb:.1f}KB {format_name}"
         img = add_diagnostic_overlay(img, stats_info, metadata)
         
+        # Save final image with optimizations
         buf = io.BytesIO()
-        img.save(buf, format='JPEG', quality=qual)
+        if use_webp:
+            img.save(buf, format='WEBP', quality=qual, method=6)
+        else:
+            img.save(buf, format='JPEG', quality=qual, optimize=True, progressive=True)
+        
         data = buf.getvalue()
         total_size = len(data)
         
@@ -543,16 +591,30 @@ def send_image(interface, target_id, file_path, res, qual, metadata=None):
         print(f"[*] TOTAL PAYLOAD: {total_size} bytes")
         
         crc_val = zlib.crc32(data) & 0xFFFFFFFF
-        # Adjust actual_chunk to account for the larger 10-byte header
-        actual_chunk = CHUNK_SIZE - 10 
+        
+        # Try compressing the entire payload
+        compressed_data = None
+        if COMPRESS_PAYLOAD and total_size > 500:  # Only compress if worth the overhead
+            compressed_data = zlib.compress(data, level=9)
+            if len(compressed_data) < total_size * 0.95:  # Only use if >5% savings
+                compression_ratio = (1 - len(compressed_data) / total_size) * 100
+                print(f"[+] Compression: {total_size} -> {len(compressed_data)} bytes ({compression_ratio:.1f}% savings)")
+                data = compressed_data
+                total_size = len(compressed_data)
+                # Recalculate CRC for compressed data
+                crc_val = zlib.crc32(data) & 0xFFFFFFFF
+        
+        # Adjust actual_chunk to account for the header (11 bytes now with compression flag)
+        actual_chunk = CHUNK_SIZE - 11
         chunks = [data[i:i + actual_chunk] for i in range(0, total_size, actual_chunk)]
         
         start_time = time.time()
         total_retries = 0
 
         for i, chunk in enumerate(chunks):
-            # Construct Header: Chunks(1) + Index(1) + CRC(4) + TotalSize(4)
-            header = bytes([len(chunks), i]) + crc_val.to_bytes(4, 'big') + total_size.to_bytes(4, 'big')
+            # Construct Header: Chunks(1) + Index(1) + Compressed(1) + CRC(4) + TotalSize(4)
+            compressed_flag = 1 if compressed_data else 0
+            header = bytes([len(chunks), i, compressed_flag]) + crc_val.to_bytes(4, 'big') + total_size.to_bytes(4, 'big')
             p_data = header + chunk
             
             success = False
@@ -576,7 +638,7 @@ def send_image(interface, target_id, file_path, res, qual, metadata=None):
 
             sent_bytes = sum(len(c) for c in chunks[:i+1])
             draw_progress_bar(i+1, len(chunks), start_time, sent_bytes, total_size, total_retries)
-            time.sleep(6)
+            time.sleep(CHUNK_DELAY)
             
         duration = time.time() - start_time
         avg_speed = total_size / duration
