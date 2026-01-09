@@ -33,7 +33,7 @@ def capture_night_image():
         "AnalogueGain": 4.0,        # Reduced from 10.0 to avoid washout
         "ExposureTime": 200000,      # 200ms exposure (was 10ms)
         "AwbEnable": False,          # Manual white balance to fix blue tint
-        "ColourGains": (2.5, 1.2),   # Red boost, blue reduction
+        "ColourGains": (1.2, 0.9),   # Original color balance
         "AeEnable": False,           # Disable auto exposure (manual control)
         "Brightness": 0.0,           # Neutral brightness
         "Contrast": 1.1              # Slight contrast boost
