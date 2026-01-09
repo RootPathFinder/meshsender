@@ -190,6 +190,18 @@ def capture_night_image():
     picam2.capture_file(IMAGE_PATH)
     picam2.stop()
     print(f"[+] Image saved to {IMAGE_PATH}")
+    
+    # Save camera metadata for overlay
+    import json
+    metadata = {
+        'exposure': optimal_exposure / 1000,  # Convert to ms
+        'gain': optimal_gain,
+        'red_gain': optimal_red_gain,
+        'blue_gain': optimal_blue_gain
+    }
+    metadata_file = IMAGE_PATH + '.meta'
+    with open(metadata_file, 'w') as f:
+        json.dump(metadata, f)
 
 def send_to_mesh(target_node, res, qual):
     print(f"[*] Sending to Node: {target_node}")

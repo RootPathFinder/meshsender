@@ -69,13 +69,30 @@ def draw_progress_bar(current_idx, total_chunks, start_time, current_bytes, tota
     sys.stdout.write(f"\rProgress: [{arrow + spaces}] {int(percent * 100)}% | {current_bytes}/{total_bytes}B | {bps:.1f}B/s | R:{retries}   ")
     sys.stdout.flush()
 
-def add_diagnostic_overlay(img, stats_text):
+def add_diagnostic_overlay(img, stats_text, metadata=None):
     draw = ImageDraw.Draw(img, "RGBA")
-    ts = time.strftime("%H:%M")
-    full_text = f"{ts} | {stats_text}"
-    box_width = len(full_text) * 6
-    draw.rectangle([0, img.height - 14, box_width, img.height], fill=(0, 0, 0, 160))
-    draw.text((3, img.height - 13), full_text, fill=(255, 255, 255, 255))
+    ts = time.strftime("%m/%d/%y %H:%M")
+    
+    # Build text lines
+    lines = [f"{ts} | {stats_text}"]
+    
+    # Add camera metadata if provided
+    if metadata:
+        if 'exposure' in metadata and 'gain' in metadata:
+            lines.append(f"Exp:{metadata['exposure']:.0f}ms G:{metadata['gain']:.1f} R:{metadata.get('red_gain', 1.0):.2f} B:{metadata.get('blue_gain', 1.0):.2f}")
+    
+    # Calculate box dimensions
+    line_height = 12
+    box_height = len(lines) * line_height + 2
+    box_width = max(len(line) * 6 for line in lines) + 6
+    
+    # Draw background box
+    draw.rectangle([0, img.height - box_height, box_width, img.height], fill=(0, 0, 0, 160))
+    
+    # Draw text lines
+    for i, line in enumerate(lines):
+        draw.text((3, img.height - box_height + 2 + i * line_height), line, fill=(255, 255, 255, 255))
+    
     return img.convert("RGB")
 
 # --- MESH LOGIC ---
@@ -134,7 +151,7 @@ def on_receive(packet, interface):
     except Exception as e:
         print(f"\n[!] Receive error: {e}")
 
-def send_image(interface, target_id, file_path, res, qual):
+def send_image(interface, target_id, file_path, res, qual, metadata=None):
     try:
         img = Image.open(file_path)
         img.thumbnail((res, res)) 
@@ -144,7 +161,7 @@ def send_image(interface, target_id, file_path, res, qual):
         size_kb = len(tmp.getvalue()) / 1024
         
         stats_info = f"{res}px {qual}Q {size_kb:.1f}KB"
-        img = add_diagnostic_overlay(img, stats_info)
+        img = add_diagnostic_overlay(img, stats_info, metadata)
         
         buf = io.BytesIO()
         img.save(buf, format='JPEG', quality=qual)
@@ -224,7 +241,17 @@ def main():
             print(f"[*] Receiver Active. Web Port: {WEB_PORT}")
             while True: time.sleep(1)
         elif args.mode == "send":
-            send_image(iface, args.target, args.file, args.res, args.qual)
+            # Check if metadata file exists
+            metadata = None
+            metadata_file = args.file + '.meta'
+            if os.path.exists(metadata_file):
+                try:
+                    import json
+                    with open(metadata_file, 'r') as f:
+                        metadata = json.load(f)
+                except Exception:
+                    pass
+            send_image(iface, args.target, args.file, args.res, args.qual, metadata)
     except Exception as e:
         print(f"[X] Connection Error: {e}")
         sys.exit(1)

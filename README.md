@@ -15,6 +15,8 @@ Meshsender enables image transmission over low-bandwidth LoRa mesh networks by f
 - **Acknowledgments**: ACK handling for reliable transmission
 - **Web Gallery**: Built-in HTTP server to browse received images at `http://localhost:5678`
 - **Pi Camera Integration**: Capture high-sensitivity images from Raspberry Pi with long-exposure support
+- **Auto-Exposure & Color Balance**: Intelligent image analysis with automatic exposure and color correction
+- **Over-exposure Detection**: Prevents blown highlights by analyzing preview images
 - **Transfer Metadata**: 10-byte headers with chunk indexing, CRC, and size information
 
 ## Requirements
@@ -51,6 +53,8 @@ The following packages will be installed:
 - **PyPubSub**: Event-based message subscription for packet handling
 - **pyserial**: Serial communication with Meshtastic devices
 - **picamera2**: Raspberry Pi camera interface (Linux only)
+- **numpy**: Numerical operations for image analysis
+- **opencv-python**: Computer vision library for advanced image processing
 
 ### 3. Set up Meshtastic device
 
@@ -124,43 +128,83 @@ python meshsender.py send '!da56b70c' photo.jpg --res 320 --qual 40
 Use `takepic.py` to capture images with the Raspberry Pi camera and send them to the mesh:
 
 ```bash
-python takepic.py
+python takepic.py <target_node_id> [--res <resolution>] [--qual <quality>]
 ```
 
-**Configuration** (edit `takepic.py`):
+**Parameters:**
+- `target_node_id`: Target Meshtastic node ID (e.g., `!da56b70c`) - **required**
+- `--res`: Image resolution in pixels (default: 720)
+- `--qual`: JPEG quality 1-100 (default: 70)
 
-```python
-TARGET_NODE = "!da56b70c"        # Node ID to send to
-# Paths are relative to the script location
-IMAGE_PATH = os.path.join(SCRIPT_DIR, "captured_image.jpg")  # Saved image
-SENDER_SCRIPT = os.path.join(SCRIPT_DIR, "meshsender.py")    # meshsender.py
-PYTHON_BIN = sys.executable     # Current Python interpreter
-RES = "720"                      # Resolution
-QUAL = "70"                      # Quality
-```
+**Examples:**
 
-**Note**: By default:
-- Images are saved to `captured_image.jpg` in the same directory as the script
-- Uses the current Python interpreter automatically (no need to configure paths)
-- `meshsender.py` is expected in the same directory as `takepic.py`
-
-**Features:**
-- Captures high-sensitivity images with long exposure (1 second default)
-- Applies manual gain and white balance for low-light scenarios
-- Allows sensor warmup before capture
-- Automatically sends captured image to mesh
-
-**Typical workflow:**
 ```bash
-# Capture image with camera and send to mesh in one command
-python takepic.py
-# Output:
-# [*] Camera warming up for long exposure...
-# [*] Capturing image...
-# [+] Image saved to captured_image.jpg
-# [*] Sending to Node: !da56b70c
-# [+] Transmission finished successfully.
+# Capture and send with default settings (720px, quality 70)
+python takepic.py '!da56b70c'
+
+# Capture with custom resolution and quality
+python takepic.py '!da56b70c' --res 320 --qual 50
+
+# Low-bandwidth transmission
+python takepic.py '!da56b70c' --res 160 --qual 20
 ```
+
+**Intelligent Auto-Exposure Features:**
+
+`takepic.py` uses OpenCV-based image analysis to automatically optimize camera settings:
+
+1. **Preview-based Auto-Adjustment** (5 iterations max):
+   - Captures low-resolution preview images (640x480)
+   - Analyzes brightness, color balance, and exposure
+   - Iteratively adjusts exposure time and analog gain
+   - Detects and corrects color casts (blue/red/yellow)
+
+2. **Over-Exposure Protection**:
+   - Detects blown highlights (>5% over-exposed pixels)
+   - Automatically reduces exposure and gain to prevent washout
+   - Reports percentage of over/under-exposed pixels
+
+3. **Color Balance Analysis**:
+   - Analyzes RGB channel ratios
+   - Detects color casts automatically
+   - Calculates optimal color gains (red/blue compensation)
+   - Particularly useful for night vision/IR cameras
+
+4. **Final High-Resolution Capture**:
+   - Applies optimized settings to full resolution (2592x1944)
+   - Uses tuned exposure, gain, and color balance
+   - Saves to `captured_image.jpg` and transmits via mesh
+
+**Sample Output:**
+```bash
+$ python takepic.py '!da56b70c' --res 720 --qual 70
+[*] Auto-adjusting exposure and color balance...
+  Iteration 1:
+    Brightness: 65.3/255
+    Exposure: 200.0ms, Gain: 4.0
+    Color Cast: blue (R:0.92 G:0.98 B:1.10)
+    Over-exposed: 0.2%, Under-exposed: 8.5%
+  Iteration 2:
+    Brightness: 88.7/255
+    Exposure: 300.0ms, Gain: 4.0
+    Color Cast: neutral (R:0.99 G:1.00 B:1.01)
+    Over-exposed: 0.1%, Under-exposed: 3.2%
+[+] Optimal settings found!
+    Final: Exposure=300.0ms, Gain=4.0
+    Color Gains: Red=1.01, Blue=0.99
+[*] Camera warming up for final capture...
+[*] Capturing final image...
+[+] Image saved to /home/pi/meshsender/captured_image.jpg
+[*] Sending to Node: !da56b70c
+```
+
+**Night Vision Camera Support:**
+
+For infrared/night vision cameras (like the Raspberry Pi Night Vision Camera with OV5647 sensor):
+- Auto-exposure works even in near-total darkness
+- Color balance correction compensates for IR sensor characteristics
+- Supports exposure times up to 800ms and gain up to 8.0
+- Automatically disables auto white balance for better IR performance
 
 ## Transfer Configuration & Tuning
 
