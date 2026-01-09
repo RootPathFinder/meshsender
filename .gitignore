@@ -10,6 +10,9 @@ venv/
 .Python
 .python-version
 
+# Image Gallery (received images)
+gallery/
+
 # Editor dirs
 .vscode/
 .idea/
@@ -18,3 +21,7 @@ venv/
 .pytest_cache/
 .coverage
 htmlcov/
+
+# OS
+.DS_Store
+Thumbs.db
