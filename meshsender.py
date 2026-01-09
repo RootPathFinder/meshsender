@@ -22,6 +22,7 @@ COMPRESS_PAYLOAD = True  # Compress chunks with zlib (if beneficial)
 CHUNK_DELAY = 4  # Delay between chunks in seconds (reduce for faster send)
 image_buffer = {}
 ack_messages = {}  # Store ACK messages from receivers: {sender_id: {transfer_id: [chunk_indices]}}
+completed_transfers = {}  # Track completed transfers: {sender_transfer_id: timestamp}
 
 if not os.path.exists(GALLERY_DIR):
     os.makedirs(GALLERY_DIR)
@@ -561,6 +562,18 @@ def on_receive(packet, interface):
                 sender = packet.get('fromId', 'unknown')
                 buffer_key = f"{sender}_{transfer_id}"
                 
+                # Check if this transfer was already completed (ignore retransmissions)
+                if buffer_key in completed_transfers:
+                    elapsed = time.time() - completed_transfers[buffer_key]
+                    if elapsed < 300:  # Keep completed transfers for 5 minutes
+                        # Resend OK confirmation
+                        ok_msg = f"OK:{transfer_id:08x}"
+                        interface.sendText(ok_msg, destinationId=sender)
+                        return
+                    else:
+                        # Clean up old completion record
+                        del completed_transfers[buffer_key]
+                
                 # Check if this is a new transfer
                 if buffer_key not in image_buffer:
                     # Clean up old transfers from this sender
@@ -637,6 +650,9 @@ def on_receive(packet, interface):
                         duration = time.time() - image_buffer[buffer_key]['start']
                         print(f"\n[SUCCESS] {len(full)} bytes in {duration:.1f}s")
                         print(f"[+] Saved to: {fname}")
+                        
+                        # Mark as completed
+                        completed_transfers[buffer_key] = time.time()
                         
                         # Send OK confirmation to sender
                         ok_msg = f"OK:{transfer_id:08x}"
@@ -770,7 +786,7 @@ def send_image(interface, target_id, file_path, res, qual, metadata=None):
         transfer_complete = False
         
         while retry_round < max_retry_rounds and not transfer_complete:
-            time.sleep(8)  # Wait for receiver to send ACK
+            time.sleep(15)  # Wait longer for receiver to send OK (was 8s)
             
             # Check if we got ACK from target
             if target_id in ack_messages and transfer_id in ack_messages[target_id]:
@@ -786,8 +802,10 @@ def send_image(interface, target_id, file_path, res, qual, metadata=None):
                 missing_chunks = [i for i in range(len(chunks)) if i not in received_chunks]
                 
                 if not missing_chunks:
-                    print(f"\n[*] All chunks received by receiver, waiting for OK...")
-                else:
+                    print(f"\n[*] All chunks acknowledged, waiting for OK...")
+                    # Don't retransmit if all chunks are there, just wait for OK
+                    retry_round += 1
+                    continue
                     print(f"\n[*] Retransmitting {len(missing_chunks)} missing chunks: {missing_chunks[:10]}{'...' if len(missing_chunks) > 10 else ''}")
                     
                     for chunk_idx in missing_chunks:
