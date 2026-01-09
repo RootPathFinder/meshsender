@@ -35,7 +35,7 @@ Meshsender enables image transmission over low-bandwidth LoRa mesh networks by f
 ### 1. Clone or download the repository
 
 ```bash
-git clone <repository-url>
+git clone https://github.com/RootPathFinder/meshsender.git
 cd meshsender
 ```
 

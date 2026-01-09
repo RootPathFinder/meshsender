@@ -2,10 +2,8 @@ import time
 import subprocess
 import sys
 import os
+import argparse
 from picamera2 import Picamera2
-
-# --- CONFIGURATION ---
-TARGET_NODE = "!da56b70c"
 
 # Get the directory where this script is located
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -16,9 +14,6 @@ SENDER_SCRIPT = os.path.join(SCRIPT_DIR, "meshsender.py")
 
 # Use the current Python interpreter
 PYTHON_BIN = sys.executable
-
-RES = "720"
-QUAL = "70"
 
 def capture_night_image():
     picam2 = Picamera2()
@@ -49,12 +44,12 @@ def capture_night_image():
     picam2.stop()
     print(f"[+] Image saved to {IMAGE_PATH}")
 
-def send_to_mesh():
-    print(f"[*] Sending to Node: {TARGET_NODE}")
+def send_to_mesh(target_node, res, qual):
+    print(f"[*] Sending to Node: {target_node}")
     cmd = [
         PYTHON_BIN, SENDER_SCRIPT, "send", 
-        TARGET_NODE, IMAGE_PATH, 
-        "--res", RES, "--qual", QUAL
+        target_node, IMAGE_PATH, 
+        "--res", res, "--qual", qual
     ]
     
     result = subprocess.run(cmd)
@@ -64,8 +59,15 @@ def send_to_mesh():
         print("[X] Error: Meshtastic transmission failed.")
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Capture and send image via Meshtastic")
+    parser.add_argument("target_id", help="Target node ID (e.g., !da56b70c)")
+    parser.add_argument("--res", default="720", help="Image resolution (default: 720)")
+    parser.add_argument("--qual", default="70", help="JPEG quality (default: 70)")
+    
+    args = parser.parse_args()
+    
     try:
         capture_night_image()
-        send_to_mesh()
+        send_to_mesh(args.target_id, args.res, args.qual)
     except Exception as e:
         print(f"[X] An error occurred: {e}")
