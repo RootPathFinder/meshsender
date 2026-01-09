@@ -501,12 +501,16 @@ def on_receive(packet, interface):
                 payload = data[11:]
                 sender = packet.get('fromId', 'unknown')
                 
+                # Always check CRC - if different, it's a new transfer
                 if sender in image_buffer:
                     if image_buffer[sender]['crc'] != crc_val:
                         print(f"\n[!] CRC MISMATCH - New transfer detected from {sender}")
                         print(f"    Old CRC: {image_buffer[sender]['crc']:08x}, New CRC: {crc_val:08x}")
                         print(f"    Discarding {sum(1 for x in image_buffer[sender]['chunks'] if x is not None)}/{len(image_buffer[sender]['chunks'])} chunks")
                         del image_buffer[sender]
+                    elif image_buffer[sender]['chunks'][chunk_index] is not None:
+                        # Duplicate chunk from same transfer - ignore silently
+                        continue
 
                 if sender not in image_buffer:
                     image_buffer[sender] = {
@@ -523,11 +527,11 @@ def on_receive(packet, interface):
                     print(f"\n[!] Incoming Image from {sender} ({reported_total_size} bytes{comp_str})")
                     print(f"    CRC: {crc_val:08x}, Total chunks: {total_chunks}")
                 
-                if image_buffer[sender]['chunks'][chunk_index] is None:
-                    image_buffer[sender]['chunks'][chunk_index] = payload
-                    image_buffer[sender]['bytes'] += len(payload)
-                    image_buffer[sender]['last_update'] = time.time()
-                    image_buffer[sender]['status'] = 'active'
+                # Store the chunk
+                image_buffer[sender]['chunks'][chunk_index] = payload
+                image_buffer[sender]['bytes'] += len(payload)
+                image_buffer[sender]['last_update'] = time.time()
+                image_buffer[sender]['status'] = 'active'
                 
                 count = sum(1 for x in image_buffer[sender]['chunks'] if x is not None)
                 draw_progress_bar(count, total_chunks, image_buffer[sender]['start'], image_buffer[sender]['bytes'], image_buffer[sender]['total_size'])
