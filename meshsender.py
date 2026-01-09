@@ -509,6 +509,17 @@ def on_ack(packet, interface):
                         ack_messages[sender][transfer_id] = chunk_list
                         print(f"\n[ACK] Received from {sender}: {len(chunk_list)} chunks for transfer {transfer_id:08x}")
                 
+                elif text.startswith('REQ:'):
+                    parts = text.split(':')
+                    if len(parts) >= 3:
+                        transfer_id = int(parts[1], 16)
+                        requested_chunks = [int(x) for x in parts[2].split(',') if x]
+                        
+                        if sender not in ack_messages:
+                            ack_messages[sender] = {}
+                        ack_messages[sender][transfer_id] = {'type': 'REQ', 'chunks': requested_chunks}
+                        print(f"\n[REQ] Receiver requesting {len(requested_chunks)} chunks for transfer {transfer_id:08x}")
+                
                 elif text.startswith('OK:'):
                     parts = text.split(':')
                     if len(parts) >= 2:
@@ -614,10 +625,17 @@ def on_receive(packet, interface):
                 count = sum(1 for x in image_buffer[buffer_key]['chunks'] if x is not None)
                 draw_progress_bar(count, total_chunks, image_buffer[buffer_key]['start'], image_buffer[buffer_key]['bytes'], image_buffer[buffer_key]['total_size'])
 
-                # Send ACK back to sender with received chunk list
-                received_indices = [i for i, c in enumerate(image_buffer[buffer_key]['chunks']) if c is not None]
-                ack_msg = f"ACK:{transfer_id:08x}:{','.join(map(str, received_indices))}"
-                interface.sendText(ack_msg, destinationId=sender)
+                # Check if transfer appears complete (or stalled)
+                elapsed_since_update = time.time() - image_buffer[buffer_key]['last_update']
+                
+                # If we haven't received a chunk in 20 seconds and some are missing, request them
+                if elapsed_since_update > 20 and None in image_buffer[buffer_key]['chunks']:
+                    missing_indices = [i for i, c in enumerate(image_buffer[buffer_key]['chunks']) if c is None]
+                    if missing_indices:
+                        req_msg = f"REQ:{transfer_id:08x}:{','.join(map(str, missing_indices))}"
+                        interface.sendText(req_msg, destinationId=sender)
+                        print(f"\n[REQ] Requesting {len(missing_indices)} missing chunks: {missing_indices[:10]}{'...' if len(missing_indices) > 10 else ''}")
+                        image_buffer[buffer_key]['last_update'] = time.time()  # Reset timer
 
                 if None not in image_buffer[buffer_key]['chunks']:
                     print(f"\n[+] All {total_chunks} chunks received!")
@@ -780,17 +798,17 @@ def send_image(interface, target_id, file_path, res, qual, metadata=None):
             draw_progress_bar(i+1, len(chunks), start_time, sent_bytes, total_size, total_retries)
             time.sleep(CHUNK_DELAY)
         
-        print(f"\n[*] Initial send complete. Waiting for receiver confirmation...")
+print(f"\n[*] Initial send complete. Waiting for receiver...")
         
-        # Wait for receiver to report status and retransmit missing chunks
-        retry_round = 0
-        max_retry_rounds = 5
+        # Wait for receiver to request missing chunks or send OK
+        wait_round = 0
+        max_wait_rounds = 10  # Wait up to 150 seconds (10 * 15s)
         transfer_complete = False
         
-        while retry_round < max_retry_rounds and not transfer_complete:
-            time.sleep(15)  # Wait longer for receiver to send OK (was 8s)
+        while wait_round < max_wait_rounds and not transfer_complete:
+            time.sleep(15)
             
-            # Check if we got ACK from target
+            # Check if we got a message from target
             if target_id in ack_messages and transfer_id in ack_messages[target_id]:
                 status = ack_messages[target_id][transfer_id]
                 
@@ -799,36 +817,35 @@ def send_image(interface, target_id, file_path, res, qual, metadata=None):
                     transfer_complete = True
                     break
                 
-                # status is a list of received chunk indices
-                received_chunks = set(status)
-                missing_chunks = [i for i in range(len(chunks)) if i not in received_chunks]
-                
-                if not missing_chunks:
-                    print(f"\n[*] All chunks acknowledged, waiting for OK...")
-                    # Don't retransmit if all chunks are there, just wait for OK
-                    retry_round += 1
-                    continue
-                
-                print(f"\n[*] Retransmitting {len(missing_chunks)} missing chunks: {missing_chunks[:10]}{'...' if len(missing_chunks) > 10 else ''}")
-                
-                for chunk_idx in missing_chunks:
-                    chunk = chunks[chunk_idx]
-                    compressed_flag = 1 if compressed_data else 0
-                    header = transfer_id.to_bytes(4, 'big') + bytes([len(chunks), chunk_idx, compressed_flag]) + crc_val.to_bytes(4, 'big') + total_size.to_bytes(4, 'big')
-                    p_data = header + chunk
+                # Check if it's a REQ message with requested chunks
+                if isinstance(status, dict) and status.get('type') == 'REQ':
+                    requested_chunks = status.get('chunks', [])
+                    print(f"\n[*] Sending {len(requested_chunks)} requested chunks: {requested_chunks[:10]}{'...' if len(requested_chunks) > 10 else ''}")
                     
-                    try:
-                        interface.sendData(p_data, destinationId=target_id, portNum=PORT_NUM, wantAck=True)
-                        total_retries += 1
-                        print(f"  [RETRY] Sent chunk {chunk_idx}/{len(chunks)-1}")
-                    except Exception as e:
-                        print(f"  [!] Failed to resend chunk {chunk_idx}: {e}")
+                    for chunk_idx in requested_chunks:
+                        if chunk_idx >= len(chunks):
+                            continue
+                        
+                        chunk = chunks[chunk_idx]
+                        compressed_flag = 1 if compressed_data else 0
+                        header = transfer_id.to_bytes(4, 'big') + bytes([len(chunks), chunk_idx, compressed_flag]) + crc_val.to_bytes(4, 'big') + total_size.to_bytes(4, 'big')
+                        p_data = header + chunk
+                        
+                        try:
+                            interface.sendData(p_data, destinationId=target_id, portNum=PORT_NUM, wantAck=True)
+                            total_retries += 1
+                            print(f"  [RETRY] Sent chunk {chunk_idx}/{len(chunks)-1}")
+                        except Exception as e:
+                            print(f"  [!] Failed to resend chunk {chunk_idx}: {e}")
                         
                         time.sleep(CHUNK_DELAY)
+                    
+                    # Clear the REQ so we don't process it again
+                    del ack_messages[target_id][transfer_id]
             else:
-                print(f"\n[*] No ACK yet from receiver (attempt {retry_round + 1}/{max_retry_rounds})...")
+                print(f"\n[*] Waiting... ({wait_round + 1}/{max_wait_rounds})")
             
-            retry_round += 1
+            wait_round += 1
         
         if not transfer_complete:
             print(f"\n[!] Transfer may be incomplete (no OK confirmation received)")
