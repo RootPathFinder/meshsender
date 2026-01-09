@@ -19,6 +19,8 @@ from picamera2 import Picamera2
 # Configuration
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 TAKEPIC_SCRIPT = os.path.join(SCRIPT_DIR, "takepic.py")
+SENDER_SCRIPT = os.path.join(SCRIPT_DIR, "meshsender.py")
+IMAGE_PATH = os.path.join(SCRIPT_DIR, "captured_image.jpg")
 PYTHON_BIN = sys.executable
 
 # Global state
@@ -62,24 +64,34 @@ def capture_and_send(target_id, reason="command"):
             last_frame = None
             time.sleep(1)  # Give camera time to fully release
         
-        # Call takepic.py to capture and send (show output in real-time)
-        cmd = [PYTHON_BIN, TAKEPIC_SCRIPT, target_id, "--res", "720", "--qual", "70"]
-        print(f"[*] Running: {' '.join(cmd)}")
+        # Call takepic.py to capture only (no send, daemon will send)
+        cmd = [PYTHON_BIN, TAKEPIC_SCRIPT, target_id, "--res", "720", "--qual", "70", "--no-send"]
+        print(f"[*] Capturing...")
         
         result = subprocess.run(cmd, timeout=300)
+        
+        if result.returncode != 0:
+            print(f"[X] Capture failed with exit code: {result.returncode}")
+            initialize_camera()
+            return False
+        
+        # Now send the image using daemon's Meshtastic interface
+        print(f"[*] Sending to {target_id}...")
+        send_cmd = [PYTHON_BIN, SENDER_SCRIPT, "send", target_id, IMAGE_PATH, "--res", "720", "--qual", "70"]
+        send_result = subprocess.run(send_cmd, timeout=300)
         
         # Reinitialize camera for motion detection
         print("[*] Reinitializing camera...")
         initialize_camera()
         
-        if result.returncode == 0:
+        if send_result.returncode == 0:
             print(f"[+] Capture and send completed successfully")
             return True
         else:
-            print(f"[X] Capture failed with exit code: {result.returncode}")
+            print(f"[X] Send failed with exit code: {send_result.returncode}")
             return False
     except subprocess.TimeoutExpired:
-        print(f"[X] Capture timed out after 300 seconds")
+        print(f"[X] Process timed out after 300 seconds")
         initialize_camera()  # Ensure camera restarts even on timeout
         return False
     except Exception as e:

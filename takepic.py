@@ -230,11 +230,13 @@ if __name__ == "__main__":
     parser.add_argument("target_id", help="Target node ID (e.g., !da56b70c)")
     parser.add_argument("--res", default="720", help="Image resolution (default: 720)")
     parser.add_argument("--qual", default="70", help="JPEG quality (default: 70)")
+    parser.add_argument("--no-send", action="store_true", help="Capture only, skip mesh send")
     
     args = parser.parse_args()
     
     try:
         capture_night_image()
-        send_to_mesh(args.target_id, args.res, args.qual)
+        if not args.no_send:
+            send_to_mesh(args.target_id, args.res, args.qual)
     except Exception as e:
         print(f"[X] An error occurred: {e}")
