@@ -610,7 +610,6 @@ def send_image(interface, target_id, file_path, res, qual, metadata=None):
         
         print(f"\n[*] SENDING: {file_path}")
         print(f"[*] TOTAL PAYLOAD: {total_size} bytes")
-        print(f"[*] Compressed: {compressed_data is not None}")
         
         crc_val = zlib.crc32(data) & 0xFFFFFFFF
         print(f"[*] CRC: {crc_val:08x}")
