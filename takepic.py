@@ -80,25 +80,25 @@ def auto_adjust_exposure(picam2, target_brightness=90, max_iterations=5):
     Automatically adjust exposure, gain, and color balance based on preview images.
     Target brightness: 0-255 (90 is good for night vision)
     """
-    exposure = 200000  # S and color balance
-    optimal_exposure, optimal_gain, optimal_red_gain, optimal_blue_gain = auto_adjust_exposure(picam2)
+    exposure = 200000  # Start with 200ms
+    gain = 4.0
+    red_gain = 1.2
+    blue_gain = 0.9
     
-    picam2.stop()
+    print("[*] Auto-adjusting exposure and color balance...")
     
-    # Now configure for full resolution
-    config = picam2.create_still_configuration(
-        main={"format": "RGB888", "size": (2592, 1944)},
-        controls={"FrameDurationLimits": (1000000, 1000000)}
-    )
-    picam2.configure(config)
-    picam2.start()
-    
-    # Apply optimal settings
-    picam2.set_controls({
-        "AnalogueGain": optimal_gain,
-        "ExposureTime": optimal_exposure,
-        "AwbEnable": False,
-        "ColourGains": (optimal_red_gain, optimal_blue_gain
+    for i in range(max_iterations):
+        # Set current settings
+        picam2.set_controls({
+            "AnalogueGain": gain,
+            "ExposureTime": exposure,
+            "AwbEnable": False,
+            "ColourGains": (red_gain, blue_gain),
+            "AeEnable": False
+        })
+        
+        time.sleep(0.5)  # Let camera adjust
+        
         # Capture preview
         preview = picam2.capture_array()
         
@@ -159,8 +159,8 @@ def capture_night_image():
     picam2.configure(preview_config)
     picam2.start()
     
-    # Auto-adjust exposure
-    optimal_exposure, optimal_gain = auto_adjust_exposure(picam2)
+    # Auto-adjust exposure and color balance
+    optimal_exposure, optimal_gain, optimal_red_gain, optimal_blue_gain = auto_adjust_exposure(picam2)
     
     picam2.stop()
     
@@ -177,7 +177,7 @@ def capture_night_image():
         "AnalogueGain": optimal_gain,
         "ExposureTime": optimal_exposure,
         "AwbEnable": False,
-        "ColourGains": (1.2, 0.9),
+        "ColourGains": (optimal_red_gain, optimal_blue_gain),
         "AeEnable": False,
         "Brightness": 0.0,
         "Contrast": 1.1
