@@ -518,7 +518,13 @@ def on_receive(packet, interface):
                 if None not in image_buffer[sender]['chunks']:
                     full = b"".join(image_buffer[sender]['chunks'])
                     
-                    # Decompress if needed
+                    # Verify CRC on assembled chunks BEFORE decompressing
+                    if zlib.crc32(full) & 0xFFFFFFFF != image_buffer[sender]['crc']:
+                        print(f"\n[X] CRC mismatch! Image corrupted.")
+                        del image_buffer[sender]
+                        return
+                    
+                    # Decompress if needed (AFTER CRC check)
                     if image_buffer[sender].get('compressed', False):
                         try:
                             full = zlib.decompress(full)
@@ -528,18 +534,15 @@ def on_receive(packet, interface):
                             del image_buffer[sender]
                             return
                     
-                    if zlib.crc32(full) & 0xFFFFFFFF == image_buffer[sender]['crc']:
-                        img = Image.open(io.BytesIO(full))
-                        
-                        # Detect format and save accordingly
-                        img_format = img.format if img.format else 'JPEG'
-                        ext = 'webp' if img_format == 'WEBP' else 'jpg'
-                        fname = f"{GALLERY_DIR}/img_{int(time.time())}.{ext}"
-                        img.save(fname)
-                        duration = time.time() - image_buffer[sender]['start']
-                        print(f"\n[SUCCESS] {len(full)} bytes in {duration:.1f}s")
-                    else:
-                        print(f"\n[X] CRC mismatch! Image corrupted.")
+                    img = Image.open(io.BytesIO(full))
+                    
+                    # Detect format and save accordingly
+                    img_format = img.format if img.format else 'JPEG'
+                    ext = 'webp' if img_format == 'WEBP' else 'jpg'
+                    fname = f"{GALLERY_DIR}/img_{int(time.time())}.{ext}"
+                    img.save(fname)
+                    duration = time.time() - image_buffer[sender]['start']
+                    print(f"\n[SUCCESS] {len(full)} bytes in {duration:.1f}s")
                     del image_buffer[sender]
     except Exception as e:
         print(f"\n[!] Receive error: {e}")
