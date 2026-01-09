@@ -537,6 +537,40 @@ def on_ack(packet, interface):
     except Exception as e:
         print(f"\n[!] ACK parse error: {e}")
 
+def check_stalled_transfers(interface):
+    """Background thread to check for stalled transfers and request missing chunks"""
+    while True:
+        time.sleep(10)  # Check every 10 seconds
+        
+        for buffer_key in list(image_buffer.keys()):
+            if buffer_key not in image_buffer:
+                continue
+                
+            transfer = image_buffer[buffer_key]
+            elapsed_since_update = time.time() - transfer['last_update']
+            
+            # If transfer has stalled for 20 seconds and chunks are missing
+            if elapsed_since_update > 20 and None in transfer['chunks']:
+                missing_indices = [i for i, c in enumerate(transfer['chunks']) if c is None]
+                if missing_indices:
+                    req_msg = f"REQ:{transfer['transfer_id']:08x}:{','.join(map(str, missing_indices))}"
+                    interface.sendText(req_msg, destinationId=transfer['sender'])
+                    print(f"\n[REQ] Requesting {len(missing_indices)} missing chunks: {missing_indices[:10]}{'...' if len(missing_indices) > 10 else ''}")
+                    transfer['last_update'] = time.time()  # Reset timer
+            
+            # Timeout transfer after 60 seconds of no new data
+            if elapsed_since_update > 60:
+                count = sum(1 for x in transfer['chunks'] if x is not None)
+                total = len(transfer['chunks'])
+                missing = [i for i, c in enumerate(transfer['chunks']) if c is None]
+                
+                print(f"\n[X] Transfer from {buffer_key} timed out (no data for 60s)")
+                print(f"\n[!] Transfer incomplete: {count}/{total} chunks received")
+                if missing:
+                    print(f"[!] Missing chunks: {missing[:20]}{'...' if len(missing) > 20 else ''}")
+                
+                del image_buffer[buffer_key]
+
 def on_receive(packet, interface):
     global image_buffer
     try:
@@ -890,6 +924,7 @@ def main():
         
         if args.mode == "receive":
             threading.Thread(target=start_web_server, daemon=True).start()
+            threading.Thread(target=check_stalled_transfers, args=(iface,), daemon=True).start()
             pub.subscribe(on_receive, "meshtastic.receive")
             print(f"[*] Receiver Active. Web Port: {WEB_PORT}")
             while True: time.sleep(1)
