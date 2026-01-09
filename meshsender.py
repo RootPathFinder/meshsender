@@ -687,7 +687,10 @@ def send_image(interface, target_id, file_path, res, qual, metadata=None):
         print(f"Retries   : {total_retries}")
         print(f"------------------------\n")
 
-    except Exception as e: print(f"\n[X] Error: {e}")
+    except Exception as e:
+        import traceback
+        print(f"\n[X] Error: {e}")
+        traceback.print_exc()
 
 def main():
     parser = argparse.ArgumentParser()
