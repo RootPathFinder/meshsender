@@ -90,8 +90,8 @@ def capture_and_send(target_id, reason="command"):
         meshsender = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(meshsender)
         
-        # Send using daemon's interface
-        success = meshsender.send_image(iface, target_id, IMAGE_PATH, res="720", qual="70")
+        # Send using daemon's interface (convert res/qual to int)
+        success = meshsender.send_image(iface, target_id, IMAGE_PATH, res=720, qual=70)
         
         # Reinitialize camera for motion detection
         print("[*] Reinitializing camera...")
