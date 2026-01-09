@@ -60,6 +60,7 @@ class GalleryHandler(http.server.SimpleHTTPRequestHandler):
                     data['status'] = 'timeout'
                     status = 'timeout'
                     print(f"\n[X] Transfer from {sender} timed out (no data for {TIMEOUT_SECONDS}s)")
+                    show_missing_chunks(sender)  # Show which chunks are missing
                 
                 # Mark for cleanup if timed out for too long (2 minutes)
                 if time_since_update > 120:
@@ -427,6 +428,18 @@ def start_web_server():
         httpd.serve_forever()
 
 # --- UTILS ---
+def show_missing_chunks(sender):
+    """Debug function to show which chunks are missing"""
+    if sender in image_buffer:
+        missing = [i for i, chunk in enumerate(image_buffer[sender]['chunks']) if chunk is None]
+        if missing:
+            total = len(image_buffer[sender]['chunks'])
+            received = total - len(missing)
+            print(f"\n[!] Transfer incomplete: {received}/{total} chunks received")
+            print(f"[!] Missing chunks: {missing[:20]}")  # Show first 20 missing
+            if len(missing) > 20:
+                print(f"[!] ... and {len(missing) - 20} more")
+
 def draw_progress_bar(current_idx, total_chunks, start_time, current_bytes, total_bytes, retries=0):
     elapsed = time.time() - start_time
     # Avoid division by zero on very first packet
@@ -516,6 +529,7 @@ def on_receive(packet, interface):
                 draw_progress_bar(count, total_chunks, image_buffer[sender]['start'], image_buffer[sender]['bytes'], image_buffer[sender]['total_size'])
 
                 if None not in image_buffer[sender]['chunks']:
+                    print(f"\n[+] All {total_chunks} chunks received!")
                     full = b"".join(image_buffer[sender]['chunks'])
                     
                     # Verify CRC on assembled chunks BEFORE decompressing
@@ -611,6 +625,9 @@ def send_image(interface, target_id, file_path, res, qual, metadata=None):
         actual_chunk = CHUNK_SIZE - 11
         chunks = [data[i:i + actual_chunk] for i in range(0, total_size, actual_chunk)]
         
+        print(f"[*] Creating {len(chunks)} chunks of {actual_chunk} bytes each")
+        print(f"[*] Total data to send: {total_size} bytes")
+        
         start_time = time.time()
         total_retries = 0
 
@@ -639,6 +656,7 @@ def send_image(interface, target_id, file_path, res, qual, metadata=None):
                 print(f"\n[X] Failed to send chunk {i+1} after {max_retries} attempts. Aborting.")
                 return
 
+            # Track actual payload bytes sent (matching how receiver counts)
             sent_bytes = sum(len(c) for c in chunks[:i+1])
             draw_progress_bar(i+1, len(chunks), start_time, sent_bytes, total_size, total_retries)
             time.sleep(CHUNK_DELAY)
@@ -646,6 +664,7 @@ def send_image(interface, target_id, file_path, res, qual, metadata=None):
         duration = time.time() - start_time
         avg_speed = total_size / duration
         print(f"\n\n--- TRANSFER SUMMARY ---")
+        print(f"Chunks Sent: {len(chunks)}")
         print(f"Final Size: {total_size} bytes")
         print(f"Time Taken: {duration:.1f} seconds")
         print(f"Avg Speed : {avg_speed:.2f} B/s")
