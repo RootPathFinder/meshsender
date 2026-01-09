@@ -654,10 +654,12 @@ def on_receive(packet, interface):
                         # Mark as completed
                         completed_transfers[buffer_key] = time.time()
                         
-                        # Send OK confirmation to sender
+                        # Send OK confirmation to sender (multiple times for reliability)
                         ok_msg = f"OK:{transfer_id:08x}"
-                        interface.sendText(ok_msg, destinationId=sender)
-                        print(f"[+] Sent OK confirmation to {sender}")
+                        for _ in range(3):
+                            interface.sendText(ok_msg, destinationId=sender)
+                            time.sleep(0.5)
+                        print(f"[+] Sent OK confirmation to {sender} (3x)")
                     except Exception as e:
                         print(f"\n[X] Failed to save image: {e}")
                         import traceback
@@ -806,7 +808,8 @@ def send_image(interface, target_id, file_path, res, qual, metadata=None):
                     # Don't retransmit if all chunks are there, just wait for OK
                     retry_round += 1
                     continue
-                    print(f"\n[*] Retransmitting {len(missing_chunks)} missing chunks: {missing_chunks[:10]}{'...' if len(missing_chunks) > 10 else ''}")
+                
+                print(f"\n[*] Retransmitting {len(missing_chunks)} missing chunks: {missing_chunks[:10]}{'...' if len(missing_chunks) > 10 else ''}")
                     
                     for chunk_idx in missing_chunks:
                         chunk = chunks[chunk_idx]

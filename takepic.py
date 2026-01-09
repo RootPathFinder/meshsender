@@ -55,13 +55,19 @@ def analyze_image_quality(image):
         color_cast = "yellow"
     
     # 5. Calculate recommended color gains to correct balance
-    # Red gain should compensate for lack of red
+    # If red is too high, REDUCE red gain. If blue is too high, REDUCE blue gain.
+    # Gains work by amplifying that channel, so to reduce red cast, lower red gain
     recommended_red_gain = 1.0 / r_ratio if r_ratio > 0 else 1.0
     recommended_blue_gain = 1.0 / b_ratio if b_ratio > 0 else 1.0
     
+    # Normalize to green (keep gains relative to each other)
+    if g_ratio > 0:
+        recommended_red_gain = recommended_red_gain * g_ratio
+        recommended_blue_gain = recommended_blue_gain * g_ratio
+    
     # Clamp gains to reasonable values
-    recommended_red_gain = np.clip(recommended_red_gain, 0.5, 3.0)
-    recommended_blue_gain = np.clip(recommended_blue_gain, 0.5, 3.0)
+    recommended_red_gain = np.clip(recommended_red_gain, 0.5, 2.5)
+    recommended_blue_gain = np.clip(recommended_blue_gain, 0.5, 2.5)
     
     return {
         'overexposure_pct': overexposure_pct,
@@ -82,8 +88,8 @@ def auto_adjust_exposure(picam2, target_brightness=90, max_iterations=5):
     """
     exposure = 200000  # Start with 200ms
     gain = 4.0
-    red_gain = 1.2
-    blue_gain = 0.9
+    red_gain = 1.0  # Start neutral
+    blue_gain = 1.0  # Start neutral
     
     print("[*] Auto-adjusting exposure and color balance...")
     
@@ -120,8 +126,10 @@ def auto_adjust_exposure(picam2, target_brightness=90, max_iterations=5):
         
         # Adjust color gains based on analysis
         if i < max_iterations - 1:  # Don't adjust on last iteration
-            red_gain = analysis['recommended_red_gain']
-            blue_gain = analysis['recommended_blue_gain']
+            # Gradually move toward recommended gains (don't jump all at once)
+            red_gain = red_gain * 0.6 + analysis['recommended_red_gain'] * 0.4
+            blue_gain = blue_gain * 0.6 + analysis['recommended_blue_gain'] * 0.4
+            print(f"    Adjusting color: Red gain {red_gain:.2f}, Blue gain {blue_gain:.2f}")
         
         # Check if brightness is acceptable
         if abs(analysis['mean_brightness'] - target_brightness) < 15:
