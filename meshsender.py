@@ -34,7 +34,7 @@ class GalleryHandler(http.server.SimpleHTTPRequestHandler):
     
     def do_GET(self):
         if self.path == '/image.jpg':
-            images = sorted([f for f in os.listdir(GALLERY_DIR) if f.endswith('.jpg')], reverse=True)
+            images = sorted([f for f in os.listdir(GALLERY_DIR) if f.endswith(('.jpg', '.webp'))], reverse=True)
             if images: self.path = f"/{GALLERY_DIR}/{images[0]}"
             else:
                 self.send_error(404, "No images yet.")
@@ -96,7 +96,7 @@ class GalleryHandler(http.server.SimpleHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-type", "text/html")
             self.end_headers()
-            images = sorted([f for f in os.listdir(GALLERY_DIR) if f.endswith('.jpg')], reverse=True)[:20]
+            images = sorted([f for f in os.listdir(GALLERY_DIR) if f.endswith(('.jpg', '.webp'))], reverse=True)[:20]
             html = """
 <html>
 <head>
@@ -488,32 +488,36 @@ def on_ack(packet, interface):
     """Handle ACK messages from receiver"""
     global ack_messages
     try:
-        if 'decoded' in packet and 'text' in packet['decoded']:
-            text = packet['decoded']['text']
-            sender = packet.get('fromId', 'unknown')
+        if 'decoded' in packet:
+            decoded = packet['decoded']
             
-            # Parse ACK messages: "ACK:transfer_id:chunk,list" or "OK:transfer_id"
-            if text.startswith('ACK:'):
-                parts = text.split(':')
-                if len(parts) >= 3:
-                    transfer_id = int(parts[1], 16)
-                    chunk_list = [int(x) for x in parts[2].split(',') if x]
-                    
-                    if sender not in ack_messages:
-                        ack_messages[sender] = {}
-                    ack_messages[sender][transfer_id] = chunk_list
-                    print(f"\n[ACK] Received from {sender}: {len(chunk_list)} chunks for transfer {transfer_id:08x}")
-            
-            elif text.startswith('OK:'):
-                parts = text.split(':')
-                if len(parts) >= 2:
-                    transfer_id = int(parts[1], 16)
-                    if sender not in ack_messages:
-                        ack_messages[sender] = {}
-                    ack_messages[sender][transfer_id] = 'COMPLETE'
-                    print(f"\n[OK] Transfer {transfer_id:08x} confirmed complete by {sender}")
+            # Check if it's a text message
+            if 'text' in decoded:
+                text = decoded.get('text', '')
+                sender = packet.get('fromId', 'unknown')
+                
+                # Parse ACK messages: "ACK:transfer_id:chunk,list" or "OK:transfer_id"
+                if text.startswith('ACK:'):
+                    parts = text.split(':')
+                    if len(parts) >= 3:
+                        transfer_id = int(parts[1], 16)
+                        chunk_list = [int(x) for x in parts[2].split(',') if x]
+                        
+                        if sender not in ack_messages:
+                            ack_messages[sender] = {}
+                        ack_messages[sender][transfer_id] = chunk_list
+                        print(f"\n[ACK] Received from {sender}: {len(chunk_list)} chunks for transfer {transfer_id:08x}")
+                
+                elif text.startswith('OK:'):
+                    parts = text.split(':')
+                    if len(parts) >= 2:
+                        transfer_id = int(parts[1], 16)
+                        if sender not in ack_messages:
+                            ack_messages[sender] = {}
+                        ack_messages[sender][transfer_id] = 'COMPLETE'
+                        print(f"\n[OK] Transfer {transfer_id:08x} confirmed complete by {sender}")
     except Exception as e:
-        pass  # Ignore parsing errors
+        print(f"\n[!] ACK parse error: {e}")
 
 def on_receive(packet, interface):
     global image_buffer
