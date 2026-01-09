@@ -604,7 +604,7 @@ def on_receive(packet, interface):
                 # Send ACK back to sender with received chunk list
                 received_indices = [i for i, c in enumerate(image_buffer[buffer_key]['chunks']) if c is not None]
                 ack_msg = f"ACK:{transfer_id:08x}:{','.join(map(str, received_indices))}"
-                interface.sendText(ack_msg, destinationId=sender, portNum=PORT_NUM)
+                interface.sendText(ack_msg, destinationId=sender)
 
                 if None not in image_buffer[buffer_key]['chunks']:
                     print(f"\n[+] All {total_chunks} chunks received!")
@@ -640,7 +640,7 @@ def on_receive(packet, interface):
                         
                         # Send OK confirmation to sender
                         ok_msg = f"OK:{transfer_id:08x}"
-                        interface.sendText(ok_msg, destinationId=sender, portNum=PORT_NUM)
+                        interface.sendText(ok_msg, destinationId=sender)
                         print(f"[+] Sent OK confirmation to {sender}")
                     except Exception as e:
                         print(f"\n[X] Failed to save image: {e}")
