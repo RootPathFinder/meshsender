@@ -206,10 +206,18 @@ def main():
     parser.add_argument("mode", choices=["send", "receive"])
     parser.add_argument("target", nargs="?"); parser.add_argument("file", nargs="?")
     parser.add_argument("--res", type=int, default=80); parser.add_argument("--qual", type=int, default=15)
+    parser.add_argument("--port", help="Serial port (e.g., /dev/ttyUSB0)")
     args = parser.parse_args()
 
     try:
-        iface = meshtastic.serial_interface.SerialInterface()
+        print("[*] Connecting to Meshtastic device...")
+        # Add connection timeout and optional port specification
+        if args.port:
+            iface = meshtastic.serial_interface.SerialInterface(devPath=args.port, connectNow=True)
+        else:
+            iface = meshtastic.serial_interface.SerialInterface(connectNow=True)
+        print("[+] Connected successfully")
+        
         if args.mode == "receive":
             threading.Thread(target=start_web_server, daemon=True).start()
             pub.subscribe(on_receive, "meshtastic.receive")
@@ -217,7 +225,9 @@ def main():
             while True: time.sleep(1)
         elif args.mode == "send":
             send_image(iface, args.target, args.file, args.res, args.qual)
-    except Exception as e: print(f"[X] Connection Error: {e}")
+    except Exception as e:
+        print(f"[X] Connection Error: {e}")
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()
