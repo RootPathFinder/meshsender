@@ -1,2 +1,5 @@
 meshtastic
-Pillow
+Pillow>=9.0
+PyPubSub>=4.0
+pyserial>=3.5
+picamera2; platform_system=="Linux"
