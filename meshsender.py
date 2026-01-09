@@ -523,6 +523,11 @@ def on_receive(packet, interface):
             if decoded.get('portnum') == PORT_NUM or decoded.get('portnum') == 'PRIVATE_APP':
                 data = decoded.get('payload')
                 
+                # Validate minimum header size
+                if len(data) < 15:
+                    print(f"\n[!] Packet too small: {len(data)} bytes (need 15)")
+                    return
+                
                 # Header Structure:
                 # [0-3]: Transfer ID (4 bytes)
                 # [4]: Total Chunks (1 byte)
@@ -533,10 +538,22 @@ def on_receive(packet, interface):
                 transfer_id = int.from_bytes(data[0:4], byteorder='big')
                 total_chunks = data[4]
                 chunk_index = data[5]
-                compressed_flag = data[6] if len(data) > 14 else 0
+                compressed_flag = data[6]
                 crc_val = int.from_bytes(data[7:11], byteorder='big')
                 reported_total_size = int.from_bytes(data[11:15], byteorder='big')
                 payload = data[15:]
+                
+                # Validate parsed values
+                if total_chunks == 0 or total_chunks > 255:
+                    print(f"\n[!] Invalid total_chunks: {total_chunks}")
+                    return
+                if chunk_index >= total_chunks:
+                    print(f"\n[!] Invalid chunk_index: {chunk_index} >= {total_chunks}")
+                    return
+                if reported_total_size > 10000000:  # 10MB sanity check
+                    print(f"\n[!] Unrealistic size: {reported_total_size} bytes")
+                    return
+                
                 sender = packet.get('fromId', 'unknown')
                 buffer_key = f"{sender}_{transfer_id}"
                 
