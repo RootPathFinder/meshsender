@@ -53,16 +53,21 @@ def capture_and_send(target_id, reason="command"):
     last_capture_time = time.time()
     
     try:
-        # Call takepic.py to capture and send
+        # Call takepic.py to capture and send (show output in real-time)
         cmd = [PYTHON_BIN, TAKEPIC_SCRIPT, target_id, "--res", "720", "--qual", "70"]
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+        print(f"[*] Running: {' '.join(cmd)}")
+        
+        result = subprocess.run(cmd, timeout=300)
         
         if result.returncode == 0:
-            print(f"[+] Capture completed successfully")
+            print(f"[+] Capture and send completed successfully")
             return True
         else:
-            print(f"[X] Capture failed: {result.stderr}")
+            print(f"[X] Capture failed with exit code: {result.returncode}")
             return False
+    except subprocess.TimeoutExpired:
+        print(f"[X] Capture timed out after 300 seconds")
+        return False
     except Exception as e:
         print(f"[X] Capture error: {e}")
         return False

@@ -33,6 +33,12 @@ class GalleryHandler(http.server.SimpleHTTPRequestHandler):
         # Suppress HTTP logs to keep console clean
         pass
     
+    def log_error(self, format, *args):
+        # Suppress BrokenPipeError and other client disconnects
+        if 'Broken pipe' in str(args) or 'ConnectionResetError' in str(args):
+            return
+        http.server.SimpleHTTPRequestHandler.log_error(self, format, *args)
+    
     def do_GET(self):
         if self.path == '/image.jpg':
             images = sorted([f for f in os.listdir(GALLERY_DIR) if f.endswith(('.jpg', '.webp'))], reverse=True)
