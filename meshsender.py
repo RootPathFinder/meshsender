@@ -128,8 +128,11 @@ def on_receive(packet, interface):
                         img.save(fname)
                         duration = time.time() - image_buffer[sender]['start']
                         print(f"\n[SUCCESS] {len(full)} bytes in {duration:.1f}s")
+                    else:
+                        print(f"\n[X] CRC mismatch! Image corrupted.")
                     del image_buffer[sender]
-    except Exception: pass
+    except Exception as e:
+        print(f"\n[!] Receive error: {e}")
 
 def send_image(interface, target_id, file_path, res, qual):
     try:
@@ -165,13 +168,23 @@ def send_image(interface, target_id, file_path, res, qual):
             p_data = header + chunk
             
             success = False
-            while not success:
+            retry_count = 0
+            max_retries = 5
+            
+            while not success and retry_count < max_retries:
                 try:
                     interface.sendData(p_data, destinationId=target_id, portNum=PORT_NUM, wantAck=True)
                     success = True
-                except Exception:
+                except Exception as e:
+                    retry_count += 1
                     total_retries += 1
-                    time.sleep(10)
+                    print(f"\n[!] Chunk {i+1}/{len(chunks)} failed (attempt {retry_count}/{max_retries}): {e}")
+                    if retry_count < max_retries:
+                        time.sleep(3)
+            
+            if not success:
+                print(f"\n[X] Failed to send chunk {i+1} after {max_retries} attempts. Aborting.")
+                return
 
             sent_bytes = sum(len(c) for c in chunks[:i+1])
             draw_progress_bar(i+1, len(chunks), start_time, sent_bytes, total_size, total_retries)
