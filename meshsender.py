@@ -149,6 +149,8 @@ class GalleryHandler(http.server.SimpleHTTPRequestHandler):
                         if chunk is not None:
                             partial_data += chunk
                     
+                    print(f"[Preview] Trying to decode: {len(partial_data)} bytes, {received}/{total} chunks")
+                    
                     if len(partial_data) > 100:
                         try:
                             # Decompress if needed
@@ -156,54 +158,54 @@ class GalleryHandler(http.server.SimpleHTTPRequestHandler):
                             if data.get('compressed', False):
                                 try:
                                     image_data = zlib.decompress(partial_data)
-                                except:
+                                    print(f"[Preview] Decompressed to {len(image_data)} bytes")
+                                except Exception as de:
+                                    print(f"[Preview] Decompress failed: {str(de)[:50]}")
                                     pass
                             
-                            # Try to decode image (JPEG, WebP, or other formats)
+                            # Check format
+                            is_webp = b'WEBP' in image_data[:30] or b'webp' in image_data[:30]
+                            is_jpeg = image_data.startswith(b'\xff\xd8\xff')
+                            print(f"[Preview] Format detected - JPEG: {is_jpeg}, WebP: {is_webp}")
+                            
+                            # Try to decode image with permissive settings
                             from PIL import ImageFile
                             ImageFile.LOAD_TRUNCATED_IMAGES = True
                             
+                            img = Image.open(io.BytesIO(image_data))
+                            # Try to get basic info without full decode
                             try:
-                                img = Image.open(io.BytesIO(image_data))
-                                img.load()  # Force decode attempt
-                                
-                                # Successfully decoded - convert to progressive JPEG
-                                output = io.BytesIO()
-                                img.save(output, format='JPEG', progressive=True, quality=85, optimize=False)
-                                preview_data = output.getvalue()
-                                
-                                self.send_response(200)
-                                self.send_header("Content-type", "image/jpeg")
-                                self.send_header("Content-length", len(preview_data))
-                                self.send_header("Cache-Control", "no-cache")
-                                self.end_headers()
-                                self.wfile.write(preview_data)
-                                return
-                            except Exception as e:
-                                # If standard decode fails, try more aggressive WebP handling
-                                if b'WEBP' in image_data[:20] or b'webp' in image_data[:20]:
-                                    try:
-                                        # Try with strict=False for more lenient decoding
-                                        from PIL import WebPImagePlugin
-                                        img = Image.open(io.BytesIO(image_data))
-                                        img.draft(None, (img.width, img.height))
-                                        img.load()
-                                        
-                                        output = io.BytesIO()
-                                        img.save(output, format='JPEG', progressive=True, quality=85, optimize=False)
-                                        preview_data = output.getvalue()
-                                        
-                                        self.send_response(200)
-                                        self.send_header("Content-type", "image/jpeg")
-                                        self.send_header("Content-length", len(preview_data))
-                                        self.send_header("Cache-Control", "no-cache")
-                                        self.end_headers()
-                                        self.wfile.write(preview_data)
-                                        return
-                                    except:
-                                        pass
-                        except:
-                            pass
+                                width, height = img.size
+                                print(f"[Preview] Got image size: {width}x{height}")
+                            except:
+                                print(f"[Preview] Could not get size yet")
+                            
+                            # Try to actually decode it
+                            try:
+                                img.load()
+                                print(f"[Preview] Successfully loaded image")
+                            except Exception as load_err:
+                                print(f"[Preview] Load attempt: {str(load_err)[:50]}")
+                                # For WebP, PIL might still have the image even if load() fails
+                                if is_webp:
+                                    print(f"[Preview] WebP - attempting conversion anyway")
+                            
+                            # Convert to progressive JPEG regardless
+                            output = io.BytesIO()
+                            img.save(output, format='JPEG', progressive=True, quality=85, optimize=False)
+                            preview_data = output.getvalue()
+                            
+                            print(f"[Preview] Successfully converted to JPEG: {len(preview_data)} bytes")
+                            
+                            self.send_response(200)
+                            self.send_header("Content-type", "image/jpeg")
+                            self.send_header("Content-length", len(preview_data))
+                            self.send_header("Cache-Control", "no-cache")
+                            self.end_headers()
+                            self.wfile.write(preview_data)
+                            return
+                        except Exception as e:
+                            print(f"[Preview] Decode failed: {str(e)[:100]}")
                     
                     # Fallback: return progress bar placeholder
                     try:
@@ -234,6 +236,8 @@ class GalleryHandler(http.server.SimpleHTTPRequestHandler):
                         placeholder.save(output, format='JPEG')
                         preview_data = output.getvalue()
                         
+                        print(f"[Preview] Returning placeholder at {progress_pct}%")
+                        
                         self.send_response(200)
                         self.send_header("Content-type", "image/jpeg")
                         self.send_header("Content-length", len(preview_data))
@@ -241,7 +245,8 @@ class GalleryHandler(http.server.SimpleHTTPRequestHandler):
                         self.end_headers()
                         self.wfile.write(preview_data)
                         return
-                    except:
+                    except Exception as pe:
+                        print(f"[Preview] Placeholder failed: {str(pe)[:50]}")
                         pass
             
             self.send_response(404)
