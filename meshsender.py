@@ -126,9 +126,124 @@ class GalleryHandler(http.server.SimpleHTTPRequestHandler):
             return
         
         # Preview endpoint for in-progress transfers: /preview/<sender>/<transfer_id>
-        # Now simplified to just return placeholder progress - actual progressive preview disabled for WebP compatibility
         if self.path.startswith('/preview/'):
-            # Return 404 - we show progress in the gallery grid instead
+            parts = self.path.split('/')
+            if len(parts) == 4:
+                sender = parts[2]
+                transfer_id_str = parts[3]
+                
+                # Find matching transfer
+                matching_keys = [k for k in image_buffer.keys() if k.startswith(sender + '_')]
+                
+                for buffer_key in matching_keys:
+                    data = image_buffer[buffer_key]
+                    received = sum(1 for x in data['chunks'] if x is not None)
+                    total = len(data['chunks'])
+                    
+                    if received == 0:
+                        continue
+                    
+                    # Reconstruct partial image from received chunks
+                    partial_data = b''
+                    for chunk in data['chunks']:
+                        if chunk is not None:
+                            partial_data += chunk
+                    
+                    if len(partial_data) > 100:
+                        try:
+                            # Decompress if needed
+                            image_data = partial_data
+                            if data.get('compressed', False):
+                                try:
+                                    image_data = zlib.decompress(partial_data)
+                                except:
+                                    pass
+                            
+                            # Try to decode image (JPEG, WebP, or other formats)
+                            from PIL import ImageFile
+                            ImageFile.LOAD_TRUNCATED_IMAGES = True
+                            
+                            try:
+                                img = Image.open(io.BytesIO(image_data))
+                                img.load()  # Force decode attempt
+                                
+                                # Successfully decoded - convert to progressive JPEG
+                                output = io.BytesIO()
+                                img.save(output, format='JPEG', progressive=True, quality=85, optimize=False)
+                                preview_data = output.getvalue()
+                                
+                                self.send_response(200)
+                                self.send_header("Content-type", "image/jpeg")
+                                self.send_header("Content-length", len(preview_data))
+                                self.send_header("Cache-Control", "no-cache")
+                                self.end_headers()
+                                self.wfile.write(preview_data)
+                                return
+                            except Exception as e:
+                                # If standard decode fails, try more aggressive WebP handling
+                                if b'WEBP' in image_data[:20] or b'webp' in image_data[:20]:
+                                    try:
+                                        # Try with strict=False for more lenient decoding
+                                        from PIL import WebPImagePlugin
+                                        img = Image.open(io.BytesIO(image_data))
+                                        img.draft(None, (img.width, img.height))
+                                        img.load()
+                                        
+                                        output = io.BytesIO()
+                                        img.save(output, format='JPEG', progressive=True, quality=85, optimize=False)
+                                        preview_data = output.getvalue()
+                                        
+                                        self.send_response(200)
+                                        self.send_header("Content-type", "image/jpeg")
+                                        self.send_header("Content-length", len(preview_data))
+                                        self.send_header("Cache-Control", "no-cache")
+                                        self.end_headers()
+                                        self.wfile.write(preview_data)
+                                        return
+                                    except:
+                                        pass
+                        except:
+                            pass
+                    
+                    # Fallback: return progress bar placeholder
+                    try:
+                        placeholder = Image.new('RGB', (320, 240), color=(26, 31, 58))
+                        draw = ImageDraw.Draw(placeholder)
+                        
+                        progress_pct = int((received / total) * 100)
+                        bar_width = 280
+                        bar_height = 30
+                        bar_x = 20
+                        bar_y = 100
+                        
+                        # Background
+                        draw.rectangle([bar_x, bar_y, bar_x + bar_width, bar_y + bar_height], 
+                                     outline=(102, 126, 234), width=2)
+                        
+                        # Fill
+                        fill_width = int((bar_width * progress_pct) / 100)
+                        if fill_width > 0:
+                            draw.rectangle([bar_x, bar_y, bar_x + fill_width, bar_y + bar_height],
+                                         fill=(102, 126, 234))
+                        
+                        # Text
+                        text = f"{progress_pct}% ({received}/{total})"
+                        draw.text((160, 160), text, fill=(224, 230, 237), anchor="mm")
+                        
+                        output = io.BytesIO()
+                        placeholder.save(output, format='JPEG')
+                        preview_data = output.getvalue()
+                        
+                        self.send_response(200)
+                        self.send_header("Content-type", "image/jpeg")
+                        self.send_header("Content-length", len(preview_data))
+                        self.send_header("Cache-Control", "no-cache")
+                        self.end_headers()
+                        self.wfile.write(preview_data)
+                        return
+                    except:
+                        pass
+            
             self.send_response(404)
             self.end_headers()
             return
@@ -423,10 +538,10 @@ class GalleryHandler(http.server.SimpleHTTPRequestHandler):
                 const grid = document.getElementById('gallery-grid');
                 if (!grid) return;
                 
-                // Compare just the image list to detect changes (include previews for comparison)
+                // Compare the full preview and image data to detect ANY changes (including progress updates)
                 const imageListStr = JSON.stringify({
                     images: data.images,
-                    previewCount: (data.previews || []).length
+                    previews: data.previews || []
                 });
                 if (imageListStr === lastImageList) {
                     return;  // No changes, skip DOM update
@@ -439,13 +554,16 @@ class GalleryHandler(http.server.SimpleHTTPRequestHandler):
                 if (data.previews && data.previews.length > 0) {
                     html += data.previews.map(p => `
                         <div class='card preview-card'>
-                            <div style='position: relative; width: 100%; height: 240px; background: linear-gradient(135deg, #1a1f3a 0%, #252d47 100%); display: flex; align-items: center; justify-content: center;'>
-                                <div style='text-align: center; width: 100%;'>
-                                    <div style='margin-bottom: 20px; font-weight: 600; color: #667eea;'>${p.sender}</div>
-                                    <div style='background: rgba(255,255,255,0.1); height: 8px; border-radius: 4px; overflow: hidden; margin: 0 40px; margin-bottom: 12px;'>
-                                        <div style='background: linear-gradient(90deg, #667eea 0%, #764ba2 100%); height: 100%; width: ${p.progress}%; transition: width 0.3s ease;'></div>
+                            <div style='position: relative; width: 100%; height: 240px; background: linear-gradient(135deg, #1a1f3a 0%, #252d47 100%); display: flex; align-items: center; justify-content: center; overflow: hidden;'>
+                                <img src='${p.preview}?t=${Date.now()}' alt='preview' style='width: 100%; height: 100%; object-fit: cover; opacity: 0.6;' onerror='this.style.display="none";'>
+                                <div style='position: absolute; top: 0; left: 0; right: 0; bottom: 0; display: flex; align-items: center; justify-content: center; flex-direction: column;'>
+                                    <div style='text-align: center; width: 100%;'>
+                                        <div style='margin-bottom: 20px; font-weight: 600; color: #667eea; text-shadow: 0 2px 4px rgba(0,0,0,0.5);'>${p.sender}</div>
+                                        <div style='background: rgba(255,255,255,0.1); height: 8px; border-radius: 4px; overflow: hidden; margin: 0 40px; margin-bottom: 12px;'>
+                                            <div style='background: linear-gradient(90deg, #667eea 0%, #764ba2 100%); height: 100%; width: ${p.progress}%; transition: width 0.3s ease; box-shadow: 0 0 10px rgba(102,126,234,0.5);'></div>
+                                        </div>
+                                        <div style='color: #b8c1d8; font-size: 0.9rem; text-shadow: 0 1px 2px rgba(0,0,0,0.5);'>${p.progress}% Receiving...</div>
                                     </div>
-                                    <div style='color: #b8c1d8; font-size: 0.9rem;'>${p.progress}% Receiving...</div>
                                 </div>
                             </div>
                         </div>
