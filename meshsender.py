@@ -107,128 +107,11 @@ class GalleryHandler(http.server.SimpleHTTPRequestHandler):
             # Get completed images
             images = sorted([f for f in os.listdir(GALLERY_DIR) if f.endswith(('.jpg', '.webp'))], reverse=True)[:20]
             
-            # Get in-progress transfers with preview URLs
-            previews = []
-            for buffer_key, data in image_buffer.items():
-                received = sum(1 for x in data['chunks'] if x is not None)
-                total = len(data['chunks'])
-                if received > 0 and received < total:  # In progress (not started, not complete)
-                    sender = buffer_key.split('_')[0]
-                    transfer_id = buffer_key.split('_')[1]
-                    previews.append({
-                        'preview': f'/preview/{sender}/{transfer_id}',
-                        'progress': int((received / total) * 100),
-                        'sender': sender
-                    })
-            
             import json
-            self.wfile.write(json.dumps({'images': images, 'previews': previews}).encode())
+            self.wfile.write(json.dumps({'images': images}).encode())
             return
         
-        # Preview endpoint for in-progress transfers: /preview/<sender>/<transfer_id>
-        if self.path.startswith('/preview/'):
-            parts = self.path.split('/')
-            if len(parts) == 4:
-                sender = parts[2]
-                transfer_id_str = parts[3]
-                
-                # Find matching transfer
-                matching_keys = [k for k in image_buffer.keys() if k.startswith(sender + '_')]
-                
-                for buffer_key in matching_keys:
-                    data = image_buffer[buffer_key]
-                    received = sum(1 for x in data['chunks'] if x is not None)
-                    total = len(data['chunks'])
-                    
-                    if received == 0:
-                        continue
-                    
-                    # Reconstruct partial image from received chunks
-                    partial_data = b''
-                    for chunk in data['chunks']:
-                        if chunk is not None:
-                            partial_data += chunk
-                    
-                    if len(partial_data) > 100:
-                        # Check format
-                        is_webp = b'WEBP' in partial_data[:30] or b'webp' in partial_data[:30]
-                        is_jpeg = partial_data.startswith(b'\xff\xd8\xff')
-                        
-                        # Only attempt to progressively decode JPEG (WebP is too fragile)
-                        if is_jpeg:
-                            try:
-                                # Decompress if needed
-                                image_data = partial_data
-                                if data.get('compressed', False):
-                                    try:
-                                        image_data = zlib.decompress(partial_data)
-                                    except:
-                                        pass
-                                
-                                # Allow truncated JPEG
-                                from PIL import ImageFile
-                                ImageFile.LOAD_TRUNCATED_IMAGES = True
-                                
-                                img = Image.open(io.BytesIO(image_data))
-                                img.load()
-                                
-                                # Convert to progressive JPEG
-                                output = io.BytesIO()
-                                img.save(output, format='JPEG', progressive=True, quality=85, optimize=False)
-                                preview_data = output.getvalue()
-                                
-                                self.send_response(200)
-                                self.send_header("Content-type", "image/jpeg")
-                                self.send_header("Content-length", len(preview_data))
-                                self.send_header("Cache-Control", "no-cache")
-                                self.end_headers()
-                                self.wfile.write(preview_data)
-                                return
-                            except:
-                                pass
-                    
-                    # For WebP or if JPEG decode failed, return progress bar placeholder
-                    try:
-                        placeholder = Image.new('RGB', (320, 240), color=(26, 31, 58))
-                        draw = ImageDraw.Draw(placeholder)
-                        
-                        progress_pct = int((received / total) * 100)
-                        bar_width = 280
-                        bar_height = 30
-                        bar_x = 20
-                        bar_y = 100
-                        
-                        # Background
-                        draw.rectangle([bar_x, bar_y, bar_x + bar_width, bar_y + bar_height], 
-                                     outline=(102, 126, 234), width=2)
-                        
-                        # Fill
-                        fill_width = int((bar_width * progress_pct) / 100)
-                        if fill_width > 0:
-                            draw.rectangle([bar_x, bar_y, bar_x + fill_width, bar_y + bar_height],
-                                         fill=(102, 126, 234))
-                        
-                        # Text
-                        text = f"{progress_pct}% ({received}/{total})"
-                        draw.text((160, 160), text, fill=(224, 230, 237), anchor="mm")
-                        
-                        output = io.BytesIO()
-                        placeholder.save(output, format='JPEG')
-                        preview_data = output.getvalue()
-                        
-                        self.send_response(200)
-                        self.send_header("Content-type", "image/jpeg")
-                        self.send_header("Content-length", len(preview_data))
-                        self.send_header("Cache-Control", "no-cache")
-                        self.end_headers()
-                        self.wfile.write(preview_data)
-                        return
-                    except:
-                        pass
-            
-            self.send_response(404)
-            self.end_headers()
-            return
+
         
         if self.path == '/' or self.path == '/index.html':
             self.send_response(200)
@@ -452,8 +335,8 @@ class GalleryHandler(http.server.SimpleHTTPRequestHandler):
         }
     </style>
     <script>
-        let lastProgressHTML = '';
         let lastImageList = '';
+        let lastProgressHTML = '';
         
         function updateProgress() {
             fetch('/progress').then(r => r.json()).then(data => {
@@ -520,10 +403,9 @@ class GalleryHandler(http.server.SimpleHTTPRequestHandler):
                 const grid = document.getElementById('gallery-grid');
                 if (!grid) return;
                 
-                // Compare the full preview and image data to detect ANY changes (including progress updates)
+                // Compare image data to detect changes
                 const imageListStr = JSON.stringify({
-                    images: data.images,
-                    previews: data.previews || []
+                    images: data.images
                 });
                 if (imageListStr === lastImageList) {
                     return;  // No changes, skip DOM update
@@ -531,26 +413,6 @@ class GalleryHandler(http.server.SimpleHTTPRequestHandler):
                 lastImageList = imageListStr;
                 
                 let html = '';
-                
-                // Add previews first (in-progress transfers)
-                if (data.previews && data.previews.length > 0) {
-                    html += data.previews.map(p => `
-                        <div class='card preview-card'>
-                            <div style='position: relative; width: 100%; height: 240px; background: linear-gradient(135deg, #1a1f3a 0%, #252d47 100%); display: flex; align-items: center; justify-content: center; overflow: hidden;'>
-                                <img src='${p.preview}?t=${Date.now()}' alt='preview' style='width: 100%; height: 100%; object-fit: cover; opacity: 0.6;' onerror='this.style.display="none";'>
-                                <div style='position: absolute; top: 0; left: 0; right: 0; bottom: 0; display: flex; align-items: center; justify-content: center; flex-direction: column;'>
-                                    <div style='text-align: center; width: 100%;'>
-                                        <div style='margin-bottom: 20px; font-weight: 600; color: #667eea; text-shadow: 0 2px 4px rgba(0,0,0,0.5);'>${p.sender}</div>
-                                        <div style='background: rgba(255,255,255,0.1); height: 8px; border-radius: 4px; overflow: hidden; margin: 0 40px; margin-bottom: 12px;'>
-                                            <div style='background: linear-gradient(90deg, #667eea 0%, #764ba2 100%); height: 100%; width: ${p.progress}%; transition: width 0.3s ease; box-shadow: 0 0 10px rgba(102,126,234,0.5);'></div>
-                                        </div>
-                                        <div style='color: #b8c1d8; font-size: 0.9rem; text-shadow: 0 1px 2px rgba(0,0,0,0.5);'>${p.progress}% Receiving...</div>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                    `).join('');
-                }
                 
                 // Add completed images
                 if (data.images && data.images.length > 0) {
@@ -583,7 +445,7 @@ class GalleryHandler(http.server.SimpleHTTPRequestHandler):
         }
         
         setInterval(updateProgress, 1000);
-        setInterval(updateGallery, 500);  // Faster updates to show progressive rendering
+        setInterval(updateGallery, 500);
         updateProgress();
         updateGallery();
     </script>
