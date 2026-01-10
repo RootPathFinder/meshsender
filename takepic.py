@@ -11,7 +11,8 @@ from picamera2 import Picamera2
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # Relative paths (can be customized as needed)
-IMAGE_PATH = os.path.join(SCRIPT_DIR, "captured_image.webp")
+IMAGE_PATH_TEMP = os.path.join(SCRIPT_DIR, "captured_image_temp.jpg")  # Temporary capture
+IMAGE_PATH = os.path.join(SCRIPT_DIR, "captured_image.webp")  # Final WebP
 THUMBNAIL_PATH = os.path.join(SCRIPT_DIR, "captured_image_thumb.jpg")
 SENDER_SCRIPT = os.path.join(SCRIPT_DIR, "meshsender.py")
 
@@ -196,19 +197,29 @@ def capture_night_image():
     time.sleep(1.5)
     
     print("[*] Capturing final image...")
-    picam2.capture_file(IMAGE_PATH)
+    picam2.capture_file(IMAGE_PATH_TEMP)  # Capture as JPEG first
     picam2.stop()
-    print(f"[+] Image saved to {IMAGE_PATH}")
+    print(f"[+] Image captured to {IMAGE_PATH_TEMP}")
     
-    # Generate thumbnail for preview (convert to WebP first if needed, then create thumbnail)
+    # Generate thumbnail from captured JPEG
     print("[*] Generating preview thumbnail...")
-    from PIL import Image
-    img = Image.open(IMAGE_PATH)
-    
-    # Create thumbnail - resize to 320x240 max
-    img.thumbnail((320, 240), Image.Resampling.LANCZOS)
-    img.save(THUMBNAIL_PATH, format='JPEG', quality=50)
-    print(f"[+] Thumbnail saved to {THUMBNAIL_PATH}")
+    try:
+        from PIL import Image
+        # Open the captured JPEG
+        img = Image.open(IMAGE_PATH_TEMP)
+        print(f"[+] Opened captured image: {img.size} {img.format}")
+        
+        # Create thumbnail - resize to 320x240 max
+        img_thumb = img.copy()
+        img_thumb.thumbnail((320, 240), Image.Resampling.LANCZOS)
+        img_thumb.save(THUMBNAIL_PATH, format='JPEG', quality=50)
+        print(f"[+] Thumbnail saved to {THUMBNAIL_PATH}")
+        
+        # Convert original to WebP for sending
+        img.save(IMAGE_PATH, format='WEBP', quality=80)
+        print(f"[+] WebP image saved to {IMAGE_PATH}")
+    except Exception as e:
+        print(f"[X] Image processing failed: {e}")
     
     # Save camera metadata for overlay
     import json
@@ -226,32 +237,41 @@ def send_to_mesh(target_node, res, qual):
     print(f"[*] Sending to Node: {target_node}")
     
     # Send thumbnail first (for preview)
+    thumbnail_sent = False
     if os.path.exists(THUMBNAIL_PATH):
-        print(f"[*] Sending thumbnail preview...")
+        print(f"[*] Sending thumbnail preview ({os.path.getsize(THUMBNAIL_PATH)} bytes)...")
         cmd = [
             PYTHON_BIN, SENDER_SCRIPT, "send", 
             target_node, THUMBNAIL_PATH, 
             "--res", "320", "--qual", "50"
         ]
-        result = subprocess.run(cmd)
+        result = subprocess.run(cmd, capture_output=False)
         if result.returncode != 0:
             print("[X] Error: Thumbnail transmission failed.")
         else:
-            print("[+] Thumbnail sent.")
+            print("[+] Thumbnail sent successfully.")
+            thumbnail_sent = True
+            # Wait a moment between sends to ensure receiver processes first transfer
+            time.sleep(2)
+    else:
+        print(f"[!] Thumbnail not found at {THUMBNAIL_PATH}")
     
     # Then send the full resolution image
-    print(f"[*] Sending full resolution image...")
-    cmd = [
-        PYTHON_BIN, SENDER_SCRIPT, "send", 
-        target_node, IMAGE_PATH, 
-        "--res", res, "--qual", qual
-    ]
-    
-    result = subprocess.run(cmd)
-    if result.returncode == 0:
-        print("[+] Full image transmission finished successfully.")
+    if os.path.exists(IMAGE_PATH):
+        print(f"[*] Sending full resolution image ({os.path.getsize(IMAGE_PATH)} bytes)...")
+        cmd = [
+            PYTHON_BIN, SENDER_SCRIPT, "send", 
+            target_node, IMAGE_PATH, 
+            "--res", res, "--qual", qual
+        ]
+        
+        result = subprocess.run(cmd, capture_output=False)
+        if result.returncode == 0:
+            print("[+] Full image transmission finished successfully.")
+        else:
+            print("[X] Error: Full image transmission failed.")
     else:
-        print("[X] Error: Full image transmission failed.")
+        print(f"[!] Main image not found at {IMAGE_PATH}")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Capture and send image via Meshtastic")
