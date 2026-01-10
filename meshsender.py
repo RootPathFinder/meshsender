@@ -130,13 +130,18 @@ class GalleryHandler(http.server.SimpleHTTPRequestHandler):
             parts = self.path.split('/')
             if len(parts) == 4:
                 sender = parts[2]
-                transfer_id = parts[3]
-                buffer_key = f"{sender}_{transfer_id}"
+                transfer_id_str = parts[3]
                 
-                if buffer_key in image_buffer:
+                # Try both formats: as int and as is
+                matching_keys = [k for k in image_buffer.keys() if k.startswith(sender + '_')]
+                
+                for buffer_key in matching_keys:
                     data = image_buffer[buffer_key]
                     received = sum(1 for x in data['chunks'] if x is not None)
                     total = len(data['chunks'])
+                    
+                    if received == 0:
+                        continue  # Skip transfers with no data
                     
                     # Reconstruct partial image from received chunks
                     partial_data = b''
@@ -144,25 +149,77 @@ class GalleryHandler(http.server.SimpleHTTPRequestHandler):
                         if chunk is not None:
                             partial_data += chunk
                     
-                    if len(partial_data) > 0:
+                    if len(partial_data) > 50:  # Need at least some data
                         try:
-                            # Try to open as image (PIL can handle partial JPEGs)
-                            img = Image.open(io.BytesIO(partial_data))
+                            # Decompress if needed
+                            image_data = partial_data
+                            if data.get('compressed', False):
+                                try:
+                                    image_data = zlib.decompress(partial_data)
+                                except:
+                                    # Partial compressed data might not decompress yet
+                                    pass
                             
-                            # Convert to progressive JPEG
+                            # For JPEG, allow truncated files
+                            from PIL import ImageFile
+                            ImageFile.LOAD_TRUNCATED_IMAGES = True
+                            
+                            # Try to open as image
+                            img = Image.open(io.BytesIO(image_data))
+                            img.load()  # Force load to validate
+                            
+                            # Convert to progressive JPEG for smooth rendering
                             output = io.BytesIO()
-                            img.save(output, format='JPEG', progressive=True, quality=85)
+                            img.save(output, format='JPEG', progressive=True, quality=85, optimize=False)
                             preview_data = output.getvalue()
                             
                             self.send_response(200)
                             self.send_header("Content-type", "image/jpeg")
                             self.send_header("Content-length", len(preview_data))
+                            self.send_header("Cache-Control", "no-cache")
                             self.end_headers()
                             self.wfile.write(preview_data)
                             return
                         except Exception as e:
-                            # If we can't decode yet, return a placeholder
-                            pass
+                            # Can't decode yet - generate a placeholder showing progress
+                            try:
+                                placeholder = Image.new('RGB', (320, 240), color=(26, 31, 58))
+                                draw = ImageDraw.Draw(placeholder)
+                                
+                                # Draw progress bar
+                                progress_pct = int((received / total) * 100)
+                                bar_width = 280
+                                bar_height = 30
+                                bar_x = 20
+                                bar_y = 100
+                                
+                                # Background
+                                draw.rectangle([bar_x, bar_y, bar_x + bar_width, bar_y + bar_height], 
+                                             outline=(102, 126, 234), width=2)
+                                
+                                # Fill
+                                fill_width = int((bar_width * progress_pct) / 100)
+                                if fill_width > 0:
+                                    draw.rectangle([bar_x, bar_y, bar_x + fill_width, bar_y + bar_height],
+                                                 fill=(102, 126, 234))
+                                
+                                # Text
+                                text = f"{progress_pct}% ({received}/{total})"
+                                draw.text((160, 160), text, fill=(224, 230, 237), anchor="mm")
+                                
+                                output = io.BytesIO()
+                                placeholder.save(output, format='JPEG')
+                                preview_data = output.getvalue()
+                                
+                                self.send_response(200)
+                                self.send_header("Content-type", "image/jpeg")
+                                self.send_header("Content-length", len(preview_data))
+                                self.send_header("Cache-Control", "no-cache")
+                                self.end_headers()
+                                self.wfile.write(preview_data)
+                                return
+                            except:
+                                pass
             
             # If preview not available, return 404
             self.send_response(404)
