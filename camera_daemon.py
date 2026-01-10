@@ -22,6 +22,11 @@ spec = importlib.util.spec_from_file_location("meshsender_module", os.path.join(
 meshsender_module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(meshsender_module)
 
+# Import takepic functions for exposure adjustment
+spec_takepic = importlib.util.spec_from_file_location("takepic_module", os.path.join(os.path.dirname(os.path.abspath(__file__)), "takepic.py"))
+takepic_module = importlib.util.module_from_spec(spec_takepic)
+spec_takepic.loader.exec_module(takepic_module)
+
 # Configuration
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 TAKEPIC_SCRIPT = os.path.join(SCRIPT_DIR, "takepic.py")
@@ -29,6 +34,7 @@ SENDER_SCRIPT = os.path.join(SCRIPT_DIR, "meshsender.py")
 IMAGE_PATH_TEMP = os.path.join(SCRIPT_DIR, "captured_image_temp.jpg")
 IMAGE_PATH = os.path.join(SCRIPT_DIR, "captured_image.webp")
 PYTHON_BIN = sys.executable
+EXPOSURE_REFRESH_INTERVAL = 180  # Refresh exposure settings every 3 minutes
 
 # Global state
 motion_detection_enabled = False
@@ -38,6 +44,8 @@ picam2 = None
 last_frame = None
 iface = None  # Global Meshtastic interface
 target_id = None  # Default target for image transmission
+exposure_refresh_stop = threading.Event()  # Signal to stop exposure refresh thread
+camera_lock = threading.Lock()  # Protect camera access
 
 def initialize_camera():
     """Initialize camera for motion detection"""
@@ -56,7 +64,73 @@ def initialize_camera():
         print(f"[X] Camera initialization failed: {e}")
         return False
 
-def capture_and_send(target_id, reason="command", res=720, qual=70):
+def periodic_exposure_refresh():
+    """
+    Background thread that periodically refreshes exposure settings while motion detection is active.
+    This ensures cached settings stay current with lighting conditions.
+    """
+    global picam2, motion_detection_enabled, exposure_refresh_stop, camera_lock
+    
+    print("[*] Exposure refresh thread started")
+    
+    while not exposure_refresh_stop.is_set():
+        # Wait for interval, but allow early wake-up if stop is signaled
+        if exposure_refresh_stop.wait(EXPOSURE_REFRESH_INTERVAL):
+            break
+        
+        # Only refresh if motion detection is active
+        if not motion_detection_enabled or picam2 is None:
+            continue
+        
+        try:
+            print("[*] Periodic exposure refresh starting...")
+            
+            with camera_lock:
+                if picam2 is None or not motion_detection_enabled:
+                    continue
+                
+                # Capture a preview and analyze exposure
+                try:
+                    preview = picam2.capture_array()
+                    analysis = takepic_module.analyze_image_quality(preview)
+                    
+                    print(f"[*] Exposure check: Brightness={analysis['mean_brightness']:.1f}/255")
+                    print(f"    Color: {analysis['color_cast']} (R:{analysis['r_ratio']:.2f} B:{analysis['b_ratio']:.2f})")
+                    
+                    # Use takepic's auto_adjust to get new optimal settings
+                    # Run just 2 quick iterations to update for lighting changes
+                    picam2_temp = picam2
+                    new_exposure, new_gain, new_red_gain, new_blue_gain = takepic_module.auto_adjust_exposure(
+                        picam2_temp, 
+                        target_brightness=90, 
+                        max_iterations=2  # Quick 2-iteration update
+                    )
+                    
+                    # Save new settings
+                    import json
+                    metadata_file = IMAGE_PATH + '.meta'
+                    metadata = {
+                        'exposure': new_exposure / 1000,  # Convert to ms
+                        'gain': new_gain,
+                        'red_gain': new_red_gain,
+                        'blue_gain': new_blue_gain
+                    }
+                    with open(metadata_file, 'w') as f:
+                        json.dump(metadata, f)
+                    
+                    print(f"[+] Exposure settings updated and cached")
+                    print(f"    Exposure={new_exposure/1000:.1f}ms, Gain={new_gain:.1f}")
+                    
+                except Exception as inner_e:
+                    print(f"[!] Exposure refresh analysis error: {inner_e}")
+                    continue
+        
+        except Exception as e:
+            print(f"[!] Exposure refresh error: {e}")
+            import traceback
+            traceback.print_exc()
+
+def capture_and_send(target_id, reason="command", res=720, qual=70, fast_mode=False):
     """Trigger a capture and send via takepic.py"""
     global last_capture_time, picam2, last_frame, iface
     
@@ -75,7 +149,13 @@ def capture_and_send(target_id, reason="command", res=720, qual=70):
         
         # Call takepic.py to capture only (no send, daemon will send)
         cmd = [PYTHON_BIN, TAKEPIC_SCRIPT, target_id, "--res", str(res), "--qual", str(qual), "--no-send"]
-        print(f"[*] Capturing...")
+        
+        # Add --fast flag for motion-triggered captures
+        if fast_mode:
+            cmd.append("--fast")
+            print(f"[*] Fast capture mode (using cached settings)...")
+        else:
+            print(f"[*] Capturing...")
         
         result = subprocess.run(cmd, timeout=300)
         
@@ -165,10 +245,11 @@ def detect_motion():
 
 def motion_detection_loop(target_id):
     """Continuous motion detection loop"""
-    global motion_detection_enabled, last_capture_time, picam2
+    global motion_detection_enabled, last_capture_time, picam2, exposure_refresh_stop, camera_lock
     
     print("[*] Motion detection loop started")
     check_counter = 0
+    exposure_refresh_thread = None
     
     while True:
         time.sleep(0.5)  # Check twice per second
@@ -179,14 +260,28 @@ def motion_detection_loop(target_id):
             status = "ACTIVE" if motion_detection_enabled else "disabled"
             print(f"[*] Motion detection: {status}")
         
-        # Initialize camera when motion detection is enabled
+        # Initialize camera and start exposure refresh thread when motion detection is enabled
         if motion_detection_enabled and picam2 is None:
             print("[*] Motion detection enabled - initializing camera...")
             initialize_camera()
+            
+            # Start exposure refresh thread if not already running
+            if exposure_refresh_thread is None or not exposure_refresh_thread.is_alive():
+                exposure_refresh_stop.clear()
+                exposure_refresh_thread = threading.Thread(target=periodic_exposure_refresh, daemon=True)
+                exposure_refresh_thread.start()
+                print("[*] Started periodic exposure refresh thread")
         
         # Stop camera when motion detection is disabled to save power
         if not motion_detection_enabled and picam2 is not None:
             print("[*] Motion detection disabled - stopping camera to save power...")
+            
+            # Stop the exposure refresh thread
+            if exposure_refresh_thread is not None and exposure_refresh_thread.is_alive():
+                print("[*] Stopping exposure refresh thread...")
+                exposure_refresh_stop.set()
+                exposure_refresh_thread.join(timeout=5)
+            
             try:
                 picam2.stop()
                 picam2.close()
@@ -204,7 +299,13 @@ def motion_detection_loop(target_id):
         
         # Detect motion
         if detect_motion():
-            capture_and_send(target_id, reason="motion")
+            # Use fast_mode=True for motion captures: uses cached exposure settings, skips auto-adjust
+            # Run async to keep motion detection loop responsive
+            threading.Thread(
+                target=capture_and_send, 
+                args=(target_id, "motion", 720, 70, True), 
+                daemon=True
+            ).start()
 
 def on_command(packet, interface):
     """Handle incoming mesh commands"""
@@ -217,7 +318,7 @@ def on_command(packet, interface):
             if not to_id or to_id == '^all':
                 return  # Ignore channel/broadcast messages
             
-            text = packet['decoded']['text'].strip()
+            text = packet['decoded']['text'].strip().upper()  # Convert to uppercase for case-insensitive matching
             sender = packet.get('fromId', 'unknown')
             
             # Ignore transfer protocol messages (REQ/ACK/OK)
@@ -226,7 +327,7 @@ def on_command(packet, interface):
             
             print(f"\n[CMD] Direct message from {sender}: '{text}'")
             
-            # Parse commands
+            # Parse commands (now case-insensitive)
             if text.startswith("CAPTURE"):
                 # Parse optional parameters: CAPTURE:res:qual
                 parts = text.split(':')

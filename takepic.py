@@ -157,21 +157,43 @@ def auto_adjust_exposure(picam2, target_brightness=90, max_iterations=5):
     print(f"    Color Gains: Red={red_gain:.2f}, Blue={blue_gain:.2f}")
     return exposure, gain, red_gain, blue_gain
 
-def capture_night_image():
+def capture_night_image(use_cached_settings=False):
     picam2 = Picamera2()
     
-    # Configure for low-res preview first
-    preview_config = picam2.create_preview_configuration(
-        main={"format": "RGB888", "size": (640, 480)},
-        controls={"FrameDurationLimits": (100000, 1000000)}
-    )
-    picam2.configure(preview_config)
-    picam2.start()
+    # Try to load cached settings if fast capture requested
+    optimal_exposure, optimal_gain, optimal_red_gain, optimal_blue_gain = None, None, None, None
     
-    # Auto-adjust exposure and color balance
-    optimal_exposure, optimal_gain, optimal_red_gain, optimal_blue_gain = auto_adjust_exposure(picam2)
+    if use_cached_settings:
+        import json
+        metadata_file = IMAGE_PATH + '.meta'
+        if os.path.exists(metadata_file):
+            try:
+                with open(metadata_file, 'r') as f:
+                    metadata = json.load(f)
+                    optimal_exposure = int(metadata['exposure'] * 1000)
+                    optimal_gain = metadata['gain']
+                    optimal_red_gain = metadata['red_gain']
+                    optimal_blue_gain = metadata['blue_gain']
+                    print(f"[+] Loaded cached exposure settings (fast mode)")
+                    print(f"    Exposure={optimal_exposure/1000:.1f}ms, Gain={optimal_gain:.1f}")
+            except Exception as e:
+                print(f"[!] Failed to load cached settings: {e}")
+                use_cached_settings = False
     
-    picam2.stop()
+    # If no cached settings or fast mode disabled, do auto-adjustment
+    if not use_cached_settings or optimal_exposure is None:
+        # Configure for low-res preview first
+        preview_config = picam2.create_preview_configuration(
+            main={"format": "RGB888", "size": (640, 480)},
+            controls={"FrameDurationLimits": (100000, 1000000)}
+        )
+        picam2.configure(preview_config)
+        picam2.start()
+        
+        # Auto-adjust exposure and color balance
+        optimal_exposure, optimal_gain, optimal_red_gain, optimal_blue_gain = auto_adjust_exposure(picam2)
+        
+        picam2.stop()
     
     # Now configure for full resolution
     config = picam2.create_still_configuration(
@@ -260,11 +282,12 @@ if __name__ == "__main__":
     parser.add_argument("--res", default="720", help="Image resolution (default: 720)")
     parser.add_argument("--qual", default="70", help="JPEG quality (default: 70)")
     parser.add_argument("--no-send", action="store_true", help="Capture only, skip mesh send")
+    parser.add_argument("--fast", action="store_true", help="Fast capture mode using cached exposure settings (for motion detection)")
     
     args = parser.parse_args()
     
     try:
-        capture_night_image()
+        capture_night_image(use_cached_settings=args.fast)
         if not args.no_send:
             send_to_mesh(args.target_id, args.res, args.qual)
     except Exception as e:
