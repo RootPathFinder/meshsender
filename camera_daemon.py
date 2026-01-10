@@ -28,7 +28,6 @@ TAKEPIC_SCRIPT = os.path.join(SCRIPT_DIR, "takepic.py")
 SENDER_SCRIPT = os.path.join(SCRIPT_DIR, "meshsender.py")
 IMAGE_PATH_TEMP = os.path.join(SCRIPT_DIR, "captured_image_temp.jpg")
 IMAGE_PATH = os.path.join(SCRIPT_DIR, "captured_image.webp")
-THUMBNAIL_PATH = os.path.join(SCRIPT_DIR, "captured_image_thumb.jpg")
 PYTHON_BIN = sys.executable
 
 # Global state
@@ -93,22 +92,12 @@ def capture_and_send(target_id, reason="command", res=720, qual=70):
             
         print(f"[*] Sending to {target_id}...")
         
-        # Send thumbnail first (for progressive preview)
-        if os.path.exists(THUMBNAIL_PATH):
-            print(f"[*] Sending thumbnail preview ({os.path.getsize(THUMBNAIL_PATH)} bytes)...")
-            success = meshsender_module.send_image(iface, target_id, THUMBNAIL_PATH, res="320", qual="50")
-            if success:
-                print("[+] Thumbnail sent.")
-                time.sleep(2)  # Wait between sends
-            else:
-                print("[!] Thumbnail send failed, continuing with main image...")
-        
-        # Then send the full resolution WebP image
+        # Send the WebP image
         if os.path.exists(IMAGE_PATH):
-            print(f"[*] Sending full resolution image ({os.path.getsize(IMAGE_PATH)} bytes)...")
+            print(f"[*] Sending image ({os.path.getsize(IMAGE_PATH)} bytes)...")
             success = meshsender_module.send_image(iface, target_id, IMAGE_PATH, res=res, qual=qual)
         else:
-            print(f"[X] Main image not found at {IMAGE_PATH}")
+            print(f"[X] Image not found at {IMAGE_PATH}")
             success = False
         
         # Reinitialize camera for motion detection

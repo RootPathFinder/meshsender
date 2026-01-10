@@ -13,7 +13,6 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 # Relative paths (can be customized as needed)
 IMAGE_PATH_TEMP = os.path.join(SCRIPT_DIR, "captured_image_temp.jpg")  # Temporary capture
 IMAGE_PATH = os.path.join(SCRIPT_DIR, "captured_image.webp")  # Final WebP
-THUMBNAIL_PATH = os.path.join(SCRIPT_DIR, "captured_image_thumb.jpg")
 SENDER_SCRIPT = os.path.join(SCRIPT_DIR, "meshsender.py")
 
 # Use the current Python interpreter
@@ -201,22 +200,15 @@ def capture_night_image():
     picam2.stop()
     print(f"[+] Image captured to {IMAGE_PATH_TEMP}")
     
-    # Generate thumbnail from captured JPEG
-    print("[*] Generating preview thumbnail...")
+    # Convert to WebP for sending
+    print("[*] Converting to WebP...")
     try:
         from PIL import Image
         # Open the captured JPEG
         img = Image.open(IMAGE_PATH_TEMP)
         print(f"[+] Opened captured image: {img.size} {img.format}")
         
-        # Create thumbnail - resize to 320x240 max
-        img_thumb = img.copy()
-        img_thumb.thumbnail((320, 240), Image.Resampling.LANCZOS)
-        img_thumb.save(THUMBNAIL_PATH, format='JPEG', quality=50)
-        print(f"[+] Thumbnail saved to {THUMBNAIL_PATH}")
-        print(f"    Thumbnail file size: {os.path.getsize(THUMBNAIL_PATH)} bytes")
-        
-        # Convert original to WebP for sending
+        # Convert to WebP for sending
         img.save(IMAGE_PATH, format='WEBP', quality=80)
         print(f"[+] WebP image saved to {IMAGE_PATH}")
         print(f"    WebP file size: {os.path.getsize(IMAGE_PATH)} bytes")
@@ -240,36 +232,12 @@ def capture_night_image():
 
 def send_to_mesh(target_node, res, qual):
     print(f"[*] Sending to Node: {target_node}")
-    print(f"    Thumbnail path: {THUMBNAIL_PATH}")
-    print(f"    Thumbnail exists: {os.path.exists(THUMBNAIL_PATH)}")
-    print(f"    Main image path: {IMAGE_PATH}")
-    print(f"    Main image exists: {os.path.exists(IMAGE_PATH)}")
+    print(f"    Image path: {IMAGE_PATH}")
+    print(f"    Image exists: {os.path.exists(IMAGE_PATH)}")
     
-    # Send thumbnail first (for preview)
-    thumbnail_sent = False
-    if os.path.exists(THUMBNAIL_PATH):
-        print(f"[*] Sending thumbnail preview ({os.path.getsize(THUMBNAIL_PATH)} bytes)...")
-        cmd = [
-            PYTHON_BIN, SENDER_SCRIPT, "send", 
-            target_node, THUMBNAIL_PATH, 
-            "--res", "320", "--qual", "50"
-        ]
-        print(f"    Running: {' '.join(cmd)}")
-        result = subprocess.run(cmd, capture_output=False)
-        if result.returncode != 0:
-            print("[X] Error: Thumbnail transmission failed.")
-        else:
-            print("[+] Thumbnail sent successfully.")
-            thumbnail_sent = True
-            # Wait a moment between sends to ensure receiver processes first transfer
-            print("[*] Waiting 2 seconds before sending main image...")
-            time.sleep(2)
-    else:
-        print(f"[!] Thumbnail not found at {THUMBNAIL_PATH}")
-    
-    # Then send the full resolution image
+    # Send the WebP image
     if os.path.exists(IMAGE_PATH):
-        print(f"[*] Sending full resolution image ({os.path.getsize(IMAGE_PATH)} bytes)...")
+        print(f"[*] Sending image ({os.path.getsize(IMAGE_PATH)} bytes)...")
         cmd = [
             PYTHON_BIN, SENDER_SCRIPT, "send", 
             target_node, IMAGE_PATH, 
@@ -278,11 +246,11 @@ def send_to_mesh(target_node, res, qual):
         print(f"    Running: {' '.join(cmd)}")
         result = subprocess.run(cmd, capture_output=False)
         if result.returncode == 0:
-            print("[+] Full image transmission finished successfully.")
+            print("[+] Image transmission finished successfully.")
         else:
-            print("[X] Error: Full image transmission failed.")
+            print("[X] Error: Image transmission failed.")
     else:
-        print(f"[!] Main image not found at {IMAGE_PATH}")
+        print(f"[!] Image not found at {IMAGE_PATH}")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Capture and send image via Meshtastic")
