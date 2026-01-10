@@ -30,6 +30,7 @@ motion_cooldown = 30  # Seconds between motion-triggered captures
 picam2 = None
 last_frame = None
 iface = None  # Global Meshtastic interface
+target_id = None  # Default target for image transmission
 
 def initialize_camera():
     """Initialize camera for motion detection"""
@@ -185,7 +186,7 @@ def motion_detection_loop(target_id):
 
 def on_command(packet, interface):
     """Handle incoming mesh commands"""
-    global motion_detection_enabled
+    global motion_detection_enabled, target_id
     
     try:
         if 'decoded' in packet and 'text' in packet['decoded']:
@@ -260,7 +261,7 @@ def on_command(packet, interface):
         print(f"[!] Command handler error: {e}")
 
 def main():
-    global start_time, iface
+    global start_time, iface, target_id
     
     if len(sys.argv) < 2:
         print("Usage: camera_daemon.py <default_target_id>")
