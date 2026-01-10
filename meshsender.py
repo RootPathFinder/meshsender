@@ -104,11 +104,69 @@ class GalleryHandler(http.server.SimpleHTTPRequestHandler):
             self.send_header("Content-type", "application/json")
             self.end_headers()
             
-            # Get list of images sorted by most recent first (last 20)
+            # Get completed images
             images = sorted([f for f in os.listdir(GALLERY_DIR) if f.endswith(('.jpg', '.webp'))], reverse=True)[:20]
             
+            # Get in-progress transfers with preview URLs
+            previews = []
+            for buffer_key, data in image_buffer.items():
+                received = sum(1 for x in data['chunks'] if x is not None)
+                total = len(data['chunks'])
+                if received > 0 and received < total:  # In progress (not started, not complete)
+                    sender = buffer_key.split('_')[0]
+                    transfer_id = buffer_key.split('_')[1]
+                    previews.append({
+                        'preview': f'/preview/{sender}/{transfer_id}',
+                        'progress': int((received / total) * 100),
+                        'sender': sender
+                    })
+            
             import json
-            self.wfile.write(json.dumps({'images': images}).encode())
+            self.wfile.write(json.dumps({'images': images, 'previews': previews}).encode())
+            return
+        
+        # Preview endpoint for in-progress transfers: /preview/<sender>/<transfer_id>
+        if self.path.startswith('/preview/'):
+            parts = self.path.split('/')
+            if len(parts) == 4:
+                sender = parts[2]
+                transfer_id = parts[3]
+                buffer_key = f"{sender}_{transfer_id}"
+                
+                if buffer_key in image_buffer:
+                    data = image_buffer[buffer_key]
+                    received = sum(1 for x in data['chunks'] if x is not None)
+                    total = len(data['chunks'])
+                    
+                    # Reconstruct partial image from received chunks
+                    partial_data = b''
+                    for chunk in data['chunks']:
+                        if chunk is not None:
+                            partial_data += chunk
+                    
+                    if len(partial_data) > 0:
+                        try:
+                            # Try to open as image (PIL can handle partial JPEGs)
+                            img = Image.open(io.BytesIO(partial_data))
+                            
+                            # Convert to progressive JPEG
+                            output = io.BytesIO()
+                            img.save(output, format='JPEG', progressive=True, quality=85)
+                            preview_data = output.getvalue()
+                            
+                            self.send_response(200)
+                            self.send_header("Content-type", "image/jpeg")
+                            self.send_header("Content-length", len(preview_data))
+                            self.end_headers()
+                            self.wfile.write(preview_data)
+                            return
+                        except Exception as e:
+                            # If we can't decode yet, return a placeholder
+                            pass
+            
+            # If preview not available, return 404
+            self.send_response(404)
+            self.end_headers()
             return
         
         if self.path == '/' or self.path == '/index.html':
@@ -401,15 +459,52 @@ class GalleryHandler(http.server.SimpleHTTPRequestHandler):
                 const grid = document.getElementById('gallery-grid');
                 if (!grid) return;
                 
-                // Compare just the image list to detect changes
-                const imageListStr = JSON.stringify(data.images);
+                // Compare just the image list to detect changes (include previews for comparison)
+                const imageListStr = JSON.stringify({
+                    images: data.images,
+                    previewCount: (data.previews || []).length
+                });
                 if (imageListStr === lastImageList) {
                     return;  // No changes, skip DOM update
                 }
                 lastImageList = imageListStr;
                 
-                if (data.images.length === 0) {
-                    grid.innerHTML = `
+                let html = '';
+                
+                // Add previews first (in-progress transfers)
+                if (data.previews && data.previews.length > 0) {
+                    html += data.previews.map(p => `
+                        <div class='card preview-card'>
+                            <div style='position: relative; width: 100%; height: 240px; background: #1a1f3a;'>
+                                <img src='${p.preview}' alt='preview' style='width: 100%; height: 100%; object-fit: cover; opacity: 0.8;'>
+                                <div style='position: absolute; bottom: 0; left: 0; right: 0; background: linear-gradient(to top, rgba(0,0,0,0.8), transparent); padding: 12px; color: #e0e6ed; font-size: 0.85rem;'>
+                                    <div style='font-weight: 600; margin-bottom: 4px;'>${p.sender}</div>
+                                    <div style='background: rgba(255,255,255,0.2); height: 4px; border-radius: 2px; overflow: hidden;'>
+                                        <div style='background: linear-gradient(90deg, #667eea 0%, #764ba2 100%); height: 100%; width: ${p.progress}%; transition: width 0.3s ease;'></div>
+                                    </div>
+                                    <div style='margin-top: 4px; font-size: 0.75rem; opacity: 0.8;'>${p.progress}%</div>
+                                </div>
+                            </div>
+                        </div>
+                    `).join('');
+                }
+                
+                // Add completed images
+                if (data.images && data.images.length > 0) {
+                    html += data.images.map(img => `
+                        <div class='card'>
+                            <a href='/gallery/${img}'>
+                                <img src='/gallery/${img}' alt='${img}'>
+                                <div class='card-info'>
+                                    <small>${img}</small>
+                                </div>
+                            </a>
+                        </div>
+                    `).join('');
+                }
+                
+                if (!html) {
+                    html = `
                         <div class='empty-state' style='grid-column: 1/-1;'>
                             <svg fill='currentColor' viewBox='0 0 20 20'>
                                 <path d='M4 3a2 2 0 00-2 2v10a2 2 0 002 2h12a2 2 0 002-2V5a2 2 0 00-2-2H4zm12 12H4l4-8 3 6 2-4 3 6z'/>
@@ -418,26 +513,14 @@ class GalleryHandler(http.server.SimpleHTTPRequestHandler):
                             <p>Images will appear here when received via mesh</p>
                         </div>
                     `;
-                    return;
                 }
                 
-                const newGalleryHTML = data.images.map(img => `
-                    <div class='card'>
-                        <a href='/gallery/${img}'>
-                            <img src='/gallery/${img}' alt='${img}'>
-                            <div class='card-info'>
-                                <small>${img}</small>
-                            </div>
-                        </a>
-                    </div>
-                `).join('');
-                
-                grid.innerHTML = newGalleryHTML;
+                grid.innerHTML = html;
             }).catch(err => console.error('Failed to update gallery:', err));
         }
         
         setInterval(updateProgress, 1000);
-        setInterval(updateGallery, 2000);
+        setInterval(updateGallery, 500);  // Faster updates to show progressive rendering
         updateProgress();
         updateGallery();
     </script>
