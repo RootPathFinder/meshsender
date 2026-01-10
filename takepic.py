@@ -11,7 +11,8 @@ from picamera2 import Picamera2
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # Relative paths (can be customized as needed)
-IMAGE_PATH = os.path.join(SCRIPT_DIR, "captured_image.jpg")
+IMAGE_PATH = os.path.join(SCRIPT_DIR, "captured_image.webp")
+THUMBNAIL_PATH = os.path.join(SCRIPT_DIR, "captured_image_thumb.jpg")
 SENDER_SCRIPT = os.path.join(SCRIPT_DIR, "meshsender.py")
 
 # Use the current Python interpreter
@@ -199,6 +200,16 @@ def capture_night_image():
     picam2.stop()
     print(f"[+] Image saved to {IMAGE_PATH}")
     
+    # Generate thumbnail for preview (convert to WebP first if needed, then create thumbnail)
+    print("[*] Generating preview thumbnail...")
+    from PIL import Image
+    img = Image.open(IMAGE_PATH)
+    
+    # Create thumbnail - resize to 320x240 max
+    img.thumbnail((320, 240), Image.Resampling.LANCZOS)
+    img.save(THUMBNAIL_PATH, format='JPEG', quality=50)
+    print(f"[+] Thumbnail saved to {THUMBNAIL_PATH}")
+    
     # Save camera metadata for overlay
     import json
     metadata = {
@@ -213,6 +224,23 @@ def capture_night_image():
 
 def send_to_mesh(target_node, res, qual):
     print(f"[*] Sending to Node: {target_node}")
+    
+    # Send thumbnail first (for preview)
+    if os.path.exists(THUMBNAIL_PATH):
+        print(f"[*] Sending thumbnail preview...")
+        cmd = [
+            PYTHON_BIN, SENDER_SCRIPT, "send", 
+            target_node, THUMBNAIL_PATH, 
+            "--res", "320", "--qual", "50"
+        ]
+        result = subprocess.run(cmd)
+        if result.returncode != 0:
+            print("[X] Error: Thumbnail transmission failed.")
+        else:
+            print("[+] Thumbnail sent.")
+    
+    # Then send the full resolution image
+    print(f"[*] Sending full resolution image...")
     cmd = [
         PYTHON_BIN, SENDER_SCRIPT, "send", 
         target_node, IMAGE_PATH, 
@@ -221,9 +249,9 @@ def send_to_mesh(target_node, res, qual):
     
     result = subprocess.run(cmd)
     if result.returncode == 0:
-        print("[+] Transmission finished successfully.")
+        print("[+] Full image transmission finished successfully.")
     else:
-        print("[X] Error: Meshtastic transmission failed.")
+        print("[X] Error: Full image transmission failed.")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Capture and send image via Meshtastic")
