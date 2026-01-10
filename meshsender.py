@@ -900,11 +900,14 @@ def send_image(interface, target_id, file_path, res, qual, metadata=None):
         print(f"Avg Speed : {avg_speed:.2f} B/s")
         print(f"Retries   : {total_retries}")
         print(f"------------------------\n")
+        
+        return transfer_complete
 
     except Exception as e:
         import traceback
         print(f"\n[X] Error: {e}")
         traceback.print_exc()
+        return False
 
 def main():
     parser = argparse.ArgumentParser()
