@@ -15,6 +15,12 @@ import threading
 import numpy as np
 import cv2
 from picamera2 import Picamera2
+import importlib.util
+
+# Import meshsender on_ack callback for ACK message handling
+spec = importlib.util.spec_from_file_location("meshsender_module", os.path.join(os.path.dirname(os.path.abspath(__file__)), "meshsender.py"))
+meshsender_module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(meshsender_module)
 
 # Configuration
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -85,14 +91,8 @@ def capture_and_send(target_id, reason="command", res=720, qual=70):
             
         print(f"[*] Sending to {target_id}...")
         
-        # Import and use send_image from meshsender
-        import importlib.util
-        spec = importlib.util.spec_from_file_location("meshsender", SENDER_SCRIPT)
-        meshsender = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(meshsender)
-        
-        # Send using daemon's interface
-        success = meshsender.send_image(iface, target_id, IMAGE_PATH, res=res, qual=qual)
+        # Send using daemon's interface (meshsender_module already loaded at top)
+        success = meshsender_module.send_image(iface, target_id, IMAGE_PATH, res=res, qual=qual)
         
         # Reinitialize camera for motion detection
         print("[*] Reinitializing camera...")
@@ -302,6 +302,7 @@ def main():
                     
                     # Subscribe to incoming messages
                     pub.subscribe(on_command, "meshtastic.receive")
+                    pub.subscribe(meshsender_module.on_ack, "meshtastic.receive")
                     
                     # Start motion detection thread (if not already running)
                     if motion_thread is None or not motion_thread.is_alive():
