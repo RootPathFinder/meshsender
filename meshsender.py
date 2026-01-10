@@ -573,18 +573,9 @@ def check_stalled_transfers(interface):
 
 def on_receive(packet, interface):
     global image_buffer
-    # Debug: Show that callback is being triggered
-    from_id = packet.get('fromId', 'unknown')
-    print(f"[DEBUG] on_receive called from {from_id}")
-    
     try:
         if 'decoded' in packet:
             decoded = packet['decoded']
-            # Debug: Show all incoming packets
-            port = decoded.get('portnum')
-            print(f"[DEBUG] Port: {port}, has payload: {'payload' in decoded}")
-            if port and port not in ['TEXT_MESSAGE_APP', 'NODEINFO_APP', 'POSITION_APP', 'TELEMETRY_APP']:
-                print(f"[DEBUG] Non-standard packet on port: {port}")
             
             if decoded.get('portnum') == PORT_NUM or decoded.get('portnum') == 'PRIVATE_APP':
                 data = decoded.get('payload')
@@ -785,8 +776,6 @@ def send_image(interface, target_id, file_path, res, qual, metadata=None):
         
         print(f"\n[*] SENDING: {file_path}")
         print(f"[*] Transfer ID: {transfer_id:08x}")
-        print(f"[*] Target: {target_id}")
-        print(f"[*] Port: {PORT_NUM}")
         print(f"[*] TOTAL PAYLOAD: {total_size} bytes")
         
         crc_val = zlib.crc32(data) & 0xFFFFFFFF
@@ -832,11 +821,8 @@ def send_image(interface, target_id, file_path, res, qual, metadata=None):
             
             while not success and retry_count < max_retries:
                 try:
-                    interface.sendData(p_data, destinationId=target_id, portNum='PRIVATE_APP', wantAck=True)
+                    interface.sendData(p_data, destinationId=target_id, portNum=PORT_NUM, wantAck=True)
                     success = True
-                    # Debug first chunk
-                    if i == 0:
-                        print(f"\n[DEBUG] First chunk sent: {len(p_data)} bytes to {target_id} on port PRIVATE_APP")
                 except Exception as e:
                     retry_count += 1
                     total_retries += 1
