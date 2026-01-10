@@ -225,7 +225,8 @@ def on_command(packet, interface):
                         return
                 
                 print(f"[*] Remote capture requested: {res}px @ Q{qual}")
-                threading.Thread(target=capture_and_send, args=(sender, "command", res, qual), daemon=True).start()
+                # Send to default target_id, not back to command sender
+                threading.Thread(target=capture_and_send, args=(target_id, "command", res, qual), daemon=True).start()
                 interface.sendText(f"📸 Capture started ({res}px Q{qual})", destinationId=sender)
             
             elif text == "MOTION_ON":
