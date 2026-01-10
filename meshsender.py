@@ -20,7 +20,10 @@ GALLERY_DIR = "gallery"
 USE_WEBP = True  # WebP provides ~30% better compression than JPEG
 COMPRESS_PAYLOAD = True  # Compress chunks with zlib (if beneficial)
 CHUNK_DELAY = 4  # Delay between chunks in seconds (reduce for faster send)
-image_buffer = {}
+
+# Multi-stream support: image_buffer tracks concurrent transfers by (sender, transfer_id)
+# Multiple senders can transmit simultaneously, and same sender can have multiple transfers in flight
+image_buffer = {}  # Format: {sender_transfer_id: {chunks, bytes, status, ...}}
 ack_messages = {}  # Store ACK messages from receivers: {sender_id: {transfer_id: [chunk_indices]}}
 completed_transfers = {}  # Track completed transfers: {sender_transfer_id: timestamp}
 
@@ -774,7 +777,9 @@ def on_receive(packet, interface):
                         # Detect format and save accordingly
                         img_format = img.format if img.format else 'JPEG'
                         ext = 'webp' if img_format == 'WEBP' else 'jpg'
-                        fname = f"{GALLERY_DIR}/img_{int(time.time())}.{ext}"
+                        # Use transfer_id in filename to support multiple concurrent transfers
+                        sender_short = sender.replace('!', '')[-6:] if sender else 'unknown'
+                        fname = f"{GALLERY_DIR}/img_{sender_short}_{transfer_id:08x}.{ext}"
                         img.save(fname)
                         duration = time.time() - image_buffer[buffer_key]['start']
                         print(f"\n[SUCCESS] {len(full)} bytes in {duration:.1f}s")
