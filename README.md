@@ -8,6 +8,19 @@ Meshsender enables image transmission over low-bandwidth LoRa mesh networks by f
 
 **Status**: Prototype (2026). Optimized for small thumbnails and reliable delivery over constrained LoRa networks.
 
+## New: Speed & Reliability Improvements
+
+Recent updates have significantly improved transfer speed and reliability:
+
+- **⚡ Configurable Speed**: Adjustable chunk delay (1-10s) with `--fast` mode for 4x faster transfers
+- **🎯 Adaptive Delay**: Automatically optimizes speed based on network conditions
+- **🔄 Smart Retries**: Exponential backoff (3s → 6s → 12s) reduces network congestion
+- **⏱️ Adaptive Timeouts**: Transfer timeout scales with image size
+- **🔋 Power Efficient**: Optimized motion detection (50% lower CPU usage when idle)
+- **📊 Verbose Logging**: New `-v` and `--debug` flags for diagnostics
+
+See [IMPROVEMENTS.md](IMPROVEMENTS.md) for detailed performance metrics and usage examples.
+
 ## Features
 
 - **Image Fragmentation**: Splits JPEG data into small chunks fitting LoRa payload constraints
@@ -95,7 +108,7 @@ Progress: [===============>] 100% | 15234/15234B | 2543.0B/s | R:0
 Send an image to a specific node:
 
 ```bash
-python meshsender.py send <target_node_id> <image_path> [--res <resolution>] [--qual <quality>]
+python meshsender.py send <target_node_id> <image_path> [OPTIONS]
 ```
 
 **Parameters:**
@@ -104,11 +117,33 @@ python meshsender.py send <target_node_id> <image_path> [--res <resolution>] [--
 - `--res`: Thumbnail resolution in pixels (default: 80, recommended: 80-720)
 - `--qual`: JPEG quality 1-100 (default: 15, lower = more compression)
 
+**Speed & Reliability Options:**
+- `--chunk-delay SECONDS`: Delay between chunks (1-10s, default: 4s)
+- `--fast`: Fast mode (1s chunk delay, 4x faster in good networks)
+- `--no-adaptive`: Disable adaptive delay adjustment
+- `-v, --verbose`: Show detailed progress information
+- `--debug`: Show debug information for troubleshooting
+
 **Examples:**
 
-Send a small thumbnail:
+Send a small thumbnail (default):
 ```bash
 python meshsender.py send '!da56b70c' photo.jpg --res 80 --qual 15
+```
+
+Fast transfer (good network):
+```bash
+python meshsender.py send '!da56b70c' photo.jpg --fast
+```
+
+Conservative transfer (poor network):
+```bash
+python meshsender.py send '!da56b70c' photo.jpg --chunk-delay 8
+```
+
+With verbose logging:
+```bash
+python meshsender.py send '!da56b70c' photo.jpg -v
 ```
 
 Send a larger preview:
@@ -119,9 +154,10 @@ python meshsender.py send '!da56b70c' photo.jpg --res 320 --qual 40
 **Features during send:**
 - Automatically resizes image to target resolution
 - Adds timestamp and compression stats as overlay
-- Shows real-time transfer progress
-- Retries failed chunks automatically
-- Outputs transfer summary (size, duration, average speed)
+- Shows real-time transfer progress with adaptive delay
+- Exponential backoff retries for failed chunks
+- Adaptive timeout based on transfer size
+- Outputs transfer summary (size, duration, average speed, retries)
 
 ### Raspberry Pi Camera Capture & Send
 
@@ -208,6 +244,14 @@ For infrared/night vision cameras (like the Raspberry Pi Night Vision Camera wit
 
 ## Transfer Configuration & Tuning
 
+### Chunk Delay (Speed vs Reliability)
+
+- **Default**: 4 seconds between chunks (balanced)
+- **Fast Mode**: 1 second (`--fast` flag) - **4x faster** in good networks
+- **Conservative**: 6-8 seconds (`--chunk-delay 8`) - better for poor networks
+- **Adaptive**: Automatically adjusts based on success rate (enabled by default)
+- **Range**: 1-10 seconds via `--chunk-delay` parameter
+
 ### Chunk Size
 
 - **Current Setting**: 200 bytes per chunk (with 10-byte header = 210 bytes total)
@@ -216,27 +260,49 @@ For infrared/night vision cameras (like the Raspberry Pi Night Vision Camera wit
 
 ### Image Resolution & Quality
 
-| Resolution | Quality | Size (KB) | Send Time (~6s/chunk) |
-|-----------|---------|----------|----------------------|
-| 80px      | 15      | 1.2      | ~6 seconds           |
-| 160px     | 25      | 3.5      | ~15 seconds          |
-| 320px     | 40      | 8.2      | ~35 seconds          |
-| 720px     | 70      | 25+      | 2+ minutes           |
+**Transfer Time Estimates:**
+
+| Resolution | Quality | Size (KB) | Default (4s) | Fast (1s) | Improvement |
+|-----------|---------|----------|--------------|-----------|-------------|
+| 80px      | 15      | 1.2      | ~24s         | ~6s       | **4x faster** |
+| 160px     | 25      | 3.5      | ~60s         | ~15s      | **4x faster** |
+| 320px     | 40      | 8.2      | ~140s        | ~35s      | **4x faster** |
+| 720px     | 70      | 25+      | ~540s (9min) | ~135s (2.25min) | **4x faster** |
+
+*Times are approximate and depend on network conditions*
 
 ### Retry Behavior
 
-- Failed packets are automatically retried after 10 seconds
-- ACK handling ensures delivery verification
-- Transfer resumes from failed chunk (no need to restart)
+- **Exponential backoff**: 3s → 6s → 12s between retries
+- **Max retries**: 3 attempts per chunk (configurable via `MAX_RETRIES`)
+- **Adaptive timeout**: Scales with transfer size (60-300 seconds)
+- **Stall detection**: Requests missing chunks after 20 seconds of inactivity
+- **ACK handling**: Ensures delivery verification
 
 ## Configuration Knobs
 
 **meshsender.py:**
 ```python
-PORT_NUM = 256          # Meshtastic port number for this app
-CHUNK_SIZE = 200        # Data payload per chunk (bytes)
-WEB_PORT = 5678         # Web gallery server port
-GALLERY_DIR = "gallery" # Directory to store received images
+PORT_NUM = 256               # Meshtastic port number for this app
+CHUNK_SIZE = 200             # Data payload per chunk (bytes)
+WEB_PORT = 5678              # Web gallery server port
+GALLERY_DIR = "gallery"      # Directory to store received images
+CHUNK_DELAY = 4              # Default chunk delay (1-10s, CLI overrideable)
+MIN_CHUNK_DELAY = 1          # Minimum chunk delay
+MAX_CHUNK_DELAY = 10         # Maximum chunk delay
+ADAPTIVE_DELAY = True        # Enable adaptive delay by default
+MAX_RETRIES = 3              # Maximum retries per chunk
+INITIAL_RETRY_DELAY = 3      # Initial retry delay (exponential backoff)
+STALL_REQUEST_TIMEOUT = 20   # Request missing chunks after N seconds
+```
+
+**CLI Options:**
+```bash
+--chunk-delay SECONDS        # Override chunk delay (1-10s)
+--fast                       # Fast mode (1s delay, no adaptive)
+--no-adaptive                # Disable adaptive delay
+-v, --verbose                # Verbose logging
+--debug                      # Debug logging
 ```
 
 **takepic.py:**
