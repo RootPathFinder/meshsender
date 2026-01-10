@@ -164,16 +164,22 @@ def motion_detection_loop(target_id):
     print("[*] Motion detection loop started")
     check_counter = 0
     
+    # Adaptive check interval based on activity
+    check_interval = 1.0  # Start with 1 second (was 0.5s - more power efficient)
+    no_motion_count = 0
+    
     while True:
-        time.sleep(0.5)  # Check twice per second
+        time.sleep(check_interval)
         check_counter += 1
         
         # Show status every 60 seconds
-        if check_counter % 120 == 0:
+        if check_counter % int(60 / check_interval) == 0:
             status = "ACTIVE" if motion_detection_enabled else "disabled"
-            print(f"[*] Motion detection: {status}")
+            print(f"[*] Motion detection: {status} (interval: {check_interval}s)")
         
         if not motion_detection_enabled:
+            # When disabled, check less frequently to save power
+            check_interval = 2.0
             continue
         
         # Check cooldown
@@ -183,6 +189,13 @@ def motion_detection_loop(target_id):
         # Detect motion
         if detect_motion():
             capture_and_send(target_id, reason="motion")
+            check_interval = 0.5  # Check more frequently after motion detected
+            no_motion_count = 0
+        else:
+            no_motion_count += 1
+            # Gradually increase interval if no motion (power saving)
+            if no_motion_count > 10 and check_interval < 2.0:
+                check_interval = min(2.0, check_interval + 0.1)
 
 def on_command(packet, interface):
     """Handle incoming mesh commands"""
@@ -290,6 +303,8 @@ def main():
     
     # Connection loop with auto-reconnect
     motion_thread = None
+    reconnect_delay = 10  # Start with 10 second delay
+    max_reconnect_delay = 300  # Max 5 minutes between reconnect attempts
     
     try:
         while True:
@@ -299,6 +314,9 @@ def main():
                     print("\n[*] Connecting to Meshtastic device...")
                     iface = meshtastic.serial_interface.SerialInterface(connectNow=True)
                     print("[+] Connected successfully")
+                    
+                    # Reset reconnect delay on successful connection
+                    reconnect_delay = 10
                     
                     # Subscribe to incoming messages
                     pub.subscribe(on_command, "meshtastic.receive")
@@ -340,7 +358,7 @@ def main():
                 
             except Exception as e:
                 print(f"\n[!] Connection error: {e}")
-                print("[*] Attempting to reconnect in 10 seconds...")
+                print(f"[*] Attempting to reconnect in {reconnect_delay}s...")
                 
                 # Cleanup old interface
                 if iface:
@@ -350,7 +368,10 @@ def main():
                         pass
                     iface = None
                 
-                time.sleep(10)
+                time.sleep(reconnect_delay)
+                
+                # Exponential backoff: 10s, 20s, 40s, 80s, up to 5 minutes
+                reconnect_delay = min(max_reconnect_delay, reconnect_delay * 2)
     
     except KeyboardInterrupt:
         print("\n\n[*] Shutting down camera daemon...")

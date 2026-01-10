@@ -19,7 +19,15 @@ WEB_PORT = 5678
 GALLERY_DIR = "gallery"
 USE_WEBP = True  # WebP provides ~30% better compression than JPEG
 COMPRESS_PAYLOAD = True  # Compress chunks with zlib (if beneficial)
-CHUNK_DELAY = 4  # Delay between chunks in seconds (reduce for faster send)
+CHUNK_DELAY = 4  # Default delay between chunks in seconds (can be overridden via CLI)
+MIN_CHUNK_DELAY = 1  # Minimum allowed chunk delay
+MAX_CHUNK_DELAY = 10  # Maximum allowed chunk delay
+ADAPTIVE_DELAY = True  # Automatically adjust delay based on success rate
+STALL_CHECK_INTERVAL = 15  # Check for stalled transfers every N seconds (was 10)
+STALL_REQUEST_TIMEOUT = 20  # Request missing chunks after N seconds of no updates
+TRANSFER_TIMEOUT = 60  # Mark transfer as timed out after N seconds (adaptive)
+MAX_RETRIES = 3  # Maximum retry attempts per chunk (was 5)
+INITIAL_RETRY_DELAY = 3  # Initial retry delay in seconds
 image_buffer = {}
 ack_messages = {}  # Store ACK messages from receivers: {sender_id: {transfer_id: [chunk_indices]}}
 completed_transfers = {}  # Track completed transfers: {sender_transfer_id: timestamp}
@@ -540,7 +548,7 @@ def on_ack(packet, interface):
 def check_stalled_transfers(interface):
     """Background thread to check for stalled transfers and request missing chunks"""
     while True:
-        time.sleep(10)  # Check every 10 seconds
+        time.sleep(STALL_CHECK_INTERVAL)  # Check periodically
         
         for buffer_key in list(image_buffer.keys()):
             if buffer_key not in image_buffer:
@@ -549,8 +557,8 @@ def check_stalled_transfers(interface):
             transfer = image_buffer[buffer_key]
             elapsed_since_update = time.time() - transfer['last_update']
             
-            # If transfer has stalled for 20 seconds and chunks are missing
-            if elapsed_since_update > 20 and None in transfer['chunks']:
+            # If transfer has stalled and chunks are missing, request them
+            if elapsed_since_update > STALL_REQUEST_TIMEOUT and None in transfer['chunks']:
                 missing_indices = [i for i, c in enumerate(transfer['chunks']) if c is None]
                 if missing_indices:
                     req_msg = f"REQ:{transfer['transfer_id']:08x}:{','.join(map(str, missing_indices))}"
@@ -558,13 +566,17 @@ def check_stalled_transfers(interface):
                     print(f"\n[REQ] Requesting {len(missing_indices)} missing chunks: {missing_indices[:10]}{'...' if len(missing_indices) > 10 else ''}")
                     transfer['last_update'] = time.time()  # Reset timer
             
-            # Timeout transfer after 60 seconds of no new data
-            if elapsed_since_update > 60:
+            # Adaptive timeout based on transfer size and expected completion time
+            expected_duration = len(transfer['chunks']) * (CHUNK_DELAY + 2)  # Estimate with buffer
+            adaptive_timeout = max(TRANSFER_TIMEOUT, min(expected_duration * 1.5, 300))  # Cap at 5 minutes
+            
+            # Timeout transfer after adaptive timeout of no new data
+            if elapsed_since_update > adaptive_timeout:
                 count = sum(1 for x in transfer['chunks'] if x is not None)
                 total = len(transfer['chunks'])
                 missing = [i for i, c in enumerate(transfer['chunks']) if c is None]
                 
-                print(f"\n[X] Transfer from {buffer_key} timed out (no data for 60s)")
+                print(f"\n[X] Transfer from {buffer_key} timed out (no data for {adaptive_timeout:.0f}s)")
                 print(f"\n[!] Transfer incomplete: {count}/{total} chunks received")
                 if missing:
                     print(f"[!] Missing chunks: {missing[:20]}{'...' if len(missing) > 20 else ''}")
@@ -669,8 +681,8 @@ def on_receive(packet, interface):
                 # Check if transfer appears complete (or stalled)
                 elapsed_since_update = time.time() - image_buffer[buffer_key]['last_update']
                 
-                # If we haven't received a chunk in 20 seconds and some are missing, request them
-                if elapsed_since_update > 20 and None in image_buffer[buffer_key]['chunks']:
+                # If we haven't received a chunk in the stall timeout and some are missing, request them
+                if elapsed_since_update > STALL_REQUEST_TIMEOUT and None in image_buffer[buffer_key]['chunks']:
                     missing_indices = [i for i, c in enumerate(image_buffer[buffer_key]['chunks']) if c is None]
                     if missing_indices:
                         req_msg = f"REQ:{transfer_id:08x}:{','.join(map(str, missing_indices))}"
@@ -728,7 +740,26 @@ def on_receive(packet, interface):
     except Exception as e:
         print(f"\n[!] Receive error: {e}")
 
-def send_image(interface, target_id, file_path, res, qual, metadata=None):
+def send_image(interface, target_id, file_path, res, qual, metadata=None, chunk_delay=None):
+    """
+    Send an image over the mesh network
+    
+    Args:
+        interface: Meshtastic interface
+        target_id: Target node ID
+        file_path: Path to image file
+        res: Image resolution
+        qual: Image quality
+        metadata: Optional metadata dict
+        chunk_delay: Delay between chunks in seconds (uses CHUNK_DELAY if None)
+    """
+    # Use provided chunk_delay or fall back to global CHUNK_DELAY
+    if chunk_delay is None:
+        chunk_delay = CHUNK_DELAY
+    
+    # Validate chunk delay
+    chunk_delay = max(MIN_CHUNK_DELAY, min(MAX_CHUNK_DELAY, chunk_delay))
+    
     try:
         img = Image.open(file_path)
         img.thumbnail((res, res)) 
@@ -736,11 +767,12 @@ def send_image(interface, target_id, file_path, res, qual, metadata=None):
         # Determine best format
         use_webp = USE_WEBP
         
-        # Try both formats and pick the smaller one
+        # Save to JPEG first
         tmp_jpeg = io.BytesIO()
         img.save(tmp_jpeg, format='JPEG', quality=qual, optimize=True, progressive=True)
         jpeg_size = len(tmp_jpeg.getvalue())
         
+        # Only try WebP if enabled and likely to be beneficial
         if use_webp:
             tmp_webp = io.BytesIO()
             img.save(tmp_webp, format='WEBP', quality=qual, method=6)  # method=6 is slower but better compression
@@ -754,6 +786,7 @@ def send_image(interface, target_id, file_path, res, qual, metadata=None):
                 format_name = 'JPEG'
                 size_kb = jpeg_size / 1024
                 use_webp = False
+                print(f"[*] JPEG is smaller, using JPEG")
         else:
             format_name = 'JPEG'
             size_kb = jpeg_size / 1024
@@ -807,7 +840,12 @@ def send_image(interface, target_id, file_path, res, qual, metadata=None):
         
         start_time = time.time()
         total_retries = 0
+        failed_chunks = 0
+        successful_chunks = 0
         ack_received = set()  # Track which chunks have been acknowledged
+        
+        # Adaptive delay tracking
+        current_delay = chunk_delay
 
         for i, chunk in enumerate(chunks):
             # Construct Header: TransferID(4) + TotalChunks(1) + Index(1) + Compressed(1) + CRC(4) + TotalSize(4)
@@ -817,18 +855,23 @@ def send_image(interface, target_id, file_path, res, qual, metadata=None):
             
             success = False
             retry_count = 0
-            max_retries = 5
+            max_retries = MAX_RETRIES
             
             while not success and retry_count < max_retries:
                 try:
                     interface.sendData(p_data, destinationId=target_id, portNum=PORT_NUM, wantAck=True)
                     success = True
+                    successful_chunks += 1
                 except Exception as e:
                     retry_count += 1
                     total_retries += 1
+                    failed_chunks += 1
+                    # Exponential backoff: 3s, 6s, 12s
+                    retry_delay = INITIAL_RETRY_DELAY * (2 ** (retry_count - 1))
                     print(f"\n[!] Chunk {i+1}/{len(chunks)} failed (attempt {retry_count}/{max_retries}): {e}")
                     if retry_count < max_retries:
-                        time.sleep(3)
+                        print(f"[*] Retrying in {retry_delay}s...")
+                        time.sleep(retry_delay)
             
             if not success:
                 print(f"\n[X] Failed to send chunk {i+1} after {max_retries} attempts. Aborting.")
@@ -837,7 +880,16 @@ def send_image(interface, target_id, file_path, res, qual, metadata=None):
             # Track actual payload bytes sent (matching how receiver counts)
             sent_bytes = sum(len(c) for c in chunks[:i+1])
             draw_progress_bar(i+1, len(chunks), start_time, sent_bytes, total_size, total_retries)
-            time.sleep(CHUNK_DELAY)
+            
+            # Adaptive delay based on success rate (if enabled)
+            if ADAPTIVE_DELAY and i > 0:
+                success_rate = successful_chunks / (successful_chunks + failed_chunks) if (successful_chunks + failed_chunks) > 0 else 1.0
+                if success_rate < 0.9:  # If less than 90% success, increase delay
+                    current_delay = min(MAX_CHUNK_DELAY, current_delay * 1.2)
+                elif success_rate > 0.98 and current_delay > MIN_CHUNK_DELAY:  # If great success, can reduce slightly
+                    current_delay = max(MIN_CHUNK_DELAY, current_delay * 0.95)
+            
+            time.sleep(current_delay)
         
         print(f"\n[*] Initial send complete. Waiting for receiver...")
         
@@ -907,12 +959,31 @@ def send_image(interface, target_id, file_path, res, qual, metadata=None):
         traceback.print_exc()
 
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("mode", choices=["send", "receive"])
-    parser.add_argument("target", nargs="?"); parser.add_argument("file", nargs="?")
-    parser.add_argument("--res", type=int, default=80); parser.add_argument("--qual", type=int, default=15)
+    parser = argparse.ArgumentParser(description="Meshsender - Send and receive images over Meshtastic LoRa mesh")
+    parser.add_argument("mode", choices=["send", "receive"], help="Send or receive mode")
+    parser.add_argument("target", nargs="?", help="Target node ID (for send mode)")
+    parser.add_argument("file", nargs="?", help="Image file to send (for send mode)")
+    parser.add_argument("--res", type=int, default=80, help="Image resolution in pixels (default: 80)")
+    parser.add_argument("--qual", type=int, default=15, help="Image quality 1-100 (default: 15)")
     parser.add_argument("--port", help="Serial port (e.g., /dev/ttyUSB0)")
+    parser.add_argument("--chunk-delay", type=float, default=CHUNK_DELAY, 
+                        help=f"Delay between chunks in seconds (default: {CHUNK_DELAY}, range: {MIN_CHUNK_DELAY}-{MAX_CHUNK_DELAY})")
+    parser.add_argument("--no-adaptive", action="store_true", 
+                        help="Disable adaptive chunk delay adjustment")
+    parser.add_argument("--fast", action="store_true",
+                        help="Fast mode: use minimum chunk delay (1s) and disable adaptive delay")
     args = parser.parse_args()
+    
+    # Handle fast mode
+    if args.fast:
+        args.chunk_delay = MIN_CHUNK_DELAY
+        args.no_adaptive = True
+        print(f"[*] Fast mode enabled: chunk_delay={MIN_CHUNK_DELAY}s, adaptive=off")
+    
+    # Update global adaptive delay setting
+    global ADAPTIVE_DELAY
+    if args.no_adaptive:
+        ADAPTIVE_DELAY = False
 
     try:
         print("[*] Connecting to Meshtastic device...")
@@ -943,7 +1014,7 @@ def main():
                         metadata = json.load(f)
                 except Exception:
                     pass
-            send_image(iface, args.target, args.file, args.res, args.qual, metadata)
+            send_image(iface, args.target, args.file, args.res, args.qual, metadata, chunk_delay=args.chunk_delay)
     except Exception as e:
         print(f"[X] Connection Error: {e}")
         sys.exit(1)
