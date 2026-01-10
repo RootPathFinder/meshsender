@@ -145,7 +145,12 @@ def capture_and_send(target_id, reason="command", res=720, qual=70, fast_mode=Fa
             picam2.close()
             picam2 = None
             last_frame = None
-            time.sleep(1)  # Give camera time to fully release
+            time.sleep(2)  # Give camera time to fully release
+        
+        # Force garbage collection to clean up camera resources
+        import gc
+        gc.collect()
+        time.sleep(1)
         
         # Call takepic.py to capture only (no send, daemon will send)
         cmd = [PYTHON_BIN, TAKEPIC_SCRIPT, target_id, "--res", str(res), "--qual", str(qual), "--no-send"]
@@ -161,12 +166,14 @@ def capture_and_send(target_id, reason="command", res=720, qual=70, fast_mode=Fa
         
         if result.returncode != 0:
             print(f"[X] Capture failed with exit code: {result.returncode}")
+            time.sleep(3)  # Extra time before retrying to init camera
             initialize_camera()
             return False
         
         # Now send the image using daemon's Meshtastic interface
         if not iface:
             print(f"[X] No Meshtastic interface available")
+            time.sleep(3)
             initialize_camera()
             return False
             
@@ -180,9 +187,21 @@ def capture_and_send(target_id, reason="command", res=720, qual=70, fast_mode=Fa
             print(f"[X] Image not found at {IMAGE_PATH}")
             success = False
         
-        # Reinitialize camera for motion detection
+        # Reinitialize camera for motion detection with retry logic
         print("[*] Reinitializing camera...")
-        initialize_camera()
+        
+        # Force another garbage collection and longer wait
+        gc.collect()
+        time.sleep(3)  # Wait 3 seconds for all resources to be fully released
+        
+        # Try to initialize camera with retries
+        for attempt in range(3):
+            if initialize_camera():
+                break
+            if attempt < 2:
+                print(f"[*] Camera init failed, retrying... (attempt {attempt + 2}/3)")
+                gc.collect()
+                time.sleep(2)
         
         if success:
             print(f"[+] Capture and send completed successfully")
@@ -192,12 +211,18 @@ def capture_and_send(target_id, reason="command", res=720, qual=70, fast_mode=Fa
             return False
     except subprocess.TimeoutExpired:
         print(f"[X] Process timed out after 300 seconds")
+        import gc
+        gc.collect()
+        time.sleep(3)
         initialize_camera()  # Ensure camera restarts even on timeout
         return False
     except Exception as e:
         print(f"[X] Capture error: {e}")
         import traceback
         traceback.print_exc()
+        import gc
+        gc.collect()
+        time.sleep(3)
         initialize_camera()  # Ensure camera restarts even on error
         return False
 
@@ -229,13 +254,15 @@ def detect_motion():
         total_pixels = thresh.size
         change_percent = (changed_pixels / total_pixels) * 100
         
-        # Update reference frame slowly (moving average)
-        last_frame = cv2.addWeighted(last_frame, 0.9, gray, 0.1, 0)
-        
-        # Trigger if significant change (> 1% of frame)
-        if change_percent > 1.0:
+        # Trigger if significant change (> 0.5% of frame for faster detection)
+        if change_percent > 0.5:
             print(f"[!] Motion detected! ({change_percent:.2f}% change)")
             return True
+        
+        # Only update reference frame when NO motion is detected
+        # This prevents the background model from adapting to moving objects
+        # Use very slow adaptation (95% old, 5% new) during quiet periods
+        last_frame = cv2.addWeighted(last_frame, 0.95, gray, 0.05, 0)
         
         return False
         
