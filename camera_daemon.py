@@ -23,6 +23,12 @@ SENDER_SCRIPT = os.path.join(SCRIPT_DIR, "meshsender.py")
 IMAGE_PATH = os.path.join(SCRIPT_DIR, "captured_image.jpg")
 PYTHON_BIN = sys.executable
 
+# Motion detection configuration
+MOTION_NO_ACTIVITY_THRESHOLD = 10  # Checks with no motion before increasing interval
+MOTION_MAX_CHECK_INTERVAL = 2.0    # Maximum check interval when idle (seconds)
+MOTION_INTERVAL_INCREMENT = 0.1    # Amount to increase interval by (seconds)
+MOTION_DISABLED_CHECK_INTERVAL = 2.0  # Check interval when motion detection is disabled
+
 # Global state
 motion_detection_enabled = False
 last_capture_time = 0
@@ -179,7 +185,7 @@ def motion_detection_loop(target_id):
         
         if not motion_detection_enabled:
             # When disabled, check less frequently to save power
-            check_interval = 2.0
+            check_interval = MOTION_DISABLED_CHECK_INTERVAL
             continue
         
         # Check cooldown
@@ -194,8 +200,8 @@ def motion_detection_loop(target_id):
         else:
             no_motion_count += 1
             # Gradually increase interval if no motion (power saving)
-            if no_motion_count > 10 and check_interval < 2.0:
-                check_interval = min(2.0, check_interval + 0.1)
+            if no_motion_count > MOTION_NO_ACTIVITY_THRESHOLD and check_interval < MOTION_MAX_CHECK_INTERVAL:
+                check_interval = min(MOTION_MAX_CHECK_INTERVAL, check_interval + MOTION_INTERVAL_INCREMENT)
 
 def on_command(packet, interface):
     """Handle incoming mesh commands"""

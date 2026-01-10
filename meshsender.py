@@ -23,9 +23,15 @@ CHUNK_DELAY = 4  # Default delay between chunks in seconds (can be overridden vi
 MIN_CHUNK_DELAY = 1  # Minimum allowed chunk delay
 MAX_CHUNK_DELAY = 10  # Maximum allowed chunk delay
 ADAPTIVE_DELAY = True  # Automatically adjust delay based on success rate
+ADAPTIVE_SUCCESS_THRESHOLD_LOW = 0.9  # Increase delay if success rate below this (90%)
+ADAPTIVE_SUCCESS_THRESHOLD_HIGH = 0.98  # Decrease delay if success rate above this (98%)
+ADAPTIVE_DELAY_INCREASE_FACTOR = 1.2  # Multiply delay by this when success is low
+ADAPTIVE_DELAY_DECREASE_FACTOR = 0.95  # Multiply delay by this when success is high
 STALL_CHECK_INTERVAL = 15  # Check for stalled transfers every N seconds (was 10)
 STALL_REQUEST_TIMEOUT = 20  # Request missing chunks after N seconds of no updates
 TRANSFER_TIMEOUT = 60  # Mark transfer as timed out after N seconds (adaptive)
+CHUNK_OVERHEAD_BUFFER = 2  # Seconds of overhead per chunk for timeout calculation
+TIMEOUT_MULTIPLIER = 1.5  # Multiply expected duration for adaptive timeout
 MAX_RETRIES = 3  # Maximum retry attempts per chunk (was 5)
 INITIAL_RETRY_DELAY = 3  # Initial retry delay in seconds
 VERBOSE = False  # Verbose logging mode
@@ -579,8 +585,8 @@ def check_stalled_transfers(interface):
                     transfer['last_update'] = time.time()  # Reset timer
             
             # Adaptive timeout based on transfer size and expected completion time
-            expected_duration = len(transfer['chunks']) * (CHUNK_DELAY + 2)  # Estimate with buffer
-            adaptive_timeout = max(TRANSFER_TIMEOUT, min(expected_duration * 1.5, 300))  # Cap at 5 minutes
+            expected_duration = len(transfer['chunks']) * (CHUNK_DELAY + CHUNK_OVERHEAD_BUFFER)  # Estimate with buffer
+            adaptive_timeout = max(TRANSFER_TIMEOUT, min(expected_duration * TIMEOUT_MULTIPLIER, 300))  # Cap at 5 minutes
             
             # Timeout transfer after adaptive timeout of no new data
             if elapsed_since_update > adaptive_timeout:
@@ -903,10 +909,10 @@ def send_image(interface, target_id, file_path, res, qual, metadata=None, chunk_
             if ADAPTIVE_DELAY and i > 0:
                 success_rate = successful_chunks / (successful_chunks + failed_chunks) if (successful_chunks + failed_chunks) > 0 else 1.0
                 old_delay = current_delay
-                if success_rate < 0.9:  # If less than 90% success, increase delay
-                    current_delay = min(MAX_CHUNK_DELAY, current_delay * 1.2)
-                elif success_rate > 0.98 and current_delay > MIN_CHUNK_DELAY:  # If great success, can reduce slightly
-                    current_delay = max(MIN_CHUNK_DELAY, current_delay * 0.95)
+                if success_rate < ADAPTIVE_SUCCESS_THRESHOLD_LOW:  # If less than 90% success, increase delay
+                    current_delay = min(MAX_CHUNK_DELAY, current_delay * ADAPTIVE_DELAY_INCREASE_FACTOR)
+                elif success_rate > ADAPTIVE_SUCCESS_THRESHOLD_HIGH and current_delay > MIN_CHUNK_DELAY:  # If great success, can reduce slightly
+                    current_delay = max(MIN_CHUNK_DELAY, current_delay * ADAPTIVE_DELAY_DECREASE_FACTOR)
                 
                 if abs(current_delay - old_delay) > 0.01:
                     log_verbose(f"[VERBOSE] Adaptive delay adjusted: {old_delay:.2f}s -> {current_delay:.2f}s (success rate: {success_rate:.1%})")
