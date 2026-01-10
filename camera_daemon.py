@@ -165,7 +165,7 @@ def detect_motion():
 
 def motion_detection_loop(target_id):
     """Continuous motion detection loop"""
-    global motion_detection_enabled, last_capture_time
+    global motion_detection_enabled, last_capture_time, picam2
     
     print("[*] Motion detection loop started")
     check_counter = 0
@@ -178,6 +178,22 @@ def motion_detection_loop(target_id):
         if check_counter % 120 == 0:
             status = "ACTIVE" if motion_detection_enabled else "disabled"
             print(f"[*] Motion detection: {status}")
+        
+        # Initialize camera when motion detection is enabled
+        if motion_detection_enabled and picam2 is None:
+            print("[*] Motion detection enabled - initializing camera...")
+            initialize_camera()
+        
+        # Stop camera when motion detection is disabled to save power
+        if not motion_detection_enabled and picam2 is not None:
+            print("[*] Motion detection disabled - stopping camera to save power...")
+            try:
+                picam2.stop()
+                picam2.close()
+                picam2 = None
+            except Exception as e:
+                print(f"[!] Error stopping camera: {e}")
+            continue
         
         if not motion_detection_enabled:
             continue
@@ -239,7 +255,7 @@ def on_command(packet, interface):
             elif text == "MOTION_ON":
                 if not motion_detection_enabled:
                     motion_detection_enabled = True
-                    print("[+] Motion detection ENABLED")
+                    print("[+] Motion detection ENABLED - camera will start on next check")
                     interface.sendText(f"✓ Motion detection ON", destinationId=sender)
                 else:
                     interface.sendText(f"ℹ Motion already enabled", destinationId=sender)
@@ -247,7 +263,7 @@ def on_command(packet, interface):
             elif text == "MOTION_OFF":
                 if motion_detection_enabled:
                     motion_detection_enabled = False
-                    print("[-] Motion detection DISABLED")
+                    print("[-] Motion detection DISABLED - camera will stop on next check")
                     interface.sendText(f"✓ Motion detection OFF", destinationId=sender)
                 else:
                     interface.sendText(f"ℹ Motion already disabled", destinationId=sender)
@@ -288,11 +304,7 @@ def main():
     print("  MOTION_OFF            - Disable motion detection")
     print("  STATUS                - Get camera status")
     print("=" * 50)
-    
-    # Initialize camera for motion detection
-    if not initialize_camera():
-        print("[X] Failed to initialize camera. Exiting.")
-        sys.exit(1)
+    print("[*] Camera will start automatically when motion detection is enabled")
     
     # Connection loop with auto-reconnect
     motion_thread = None
