@@ -48,11 +48,11 @@ def initialize_camera():
         print(f"[X] Camera initialization failed: {e}")
         return False
 
-def capture_and_send(target_id, reason="command"):
+def capture_and_send(target_id, reason="command", res=720, qual=70):
     """Trigger a capture and send via takepic.py"""
     global last_capture_time, picam2, last_frame, iface
     
-    print(f"\n[*] Triggering capture ({reason})...")
+    print(f"\n[*] Triggering capture ({reason}) - {res}px @ Q{qual}...")
     last_capture_time = time.time()
     
     try:
@@ -66,7 +66,7 @@ def capture_and_send(target_id, reason="command"):
             time.sleep(1)  # Give camera time to fully release
         
         # Call takepic.py to capture only (no send, daemon will send)
-        cmd = [PYTHON_BIN, TAKEPIC_SCRIPT, target_id, "--res", "720", "--qual", "70", "--no-send"]
+        cmd = [PYTHON_BIN, TAKEPIC_SCRIPT, target_id, "--res", str(res), "--qual", str(qual), "--no-send"]
         print(f"[*] Capturing...")
         
         result = subprocess.run(cmd, timeout=300)
@@ -90,8 +90,8 @@ def capture_and_send(target_id, reason="command"):
         meshsender = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(meshsender)
         
-        # Send using daemon's interface (convert res/qual to int)
-        success = meshsender.send_image(iface, target_id, IMAGE_PATH, res=720, qual=70)
+        # Send using daemon's interface
+        success = meshsender.send_image(iface, target_id, IMAGE_PATH, res=res, qual=qual)
         
         # Reinitialize camera for motion detection
         print("[*] Reinitializing camera...")
@@ -204,10 +204,29 @@ def on_command(packet, interface):
             print(f"\n[CMD] Direct message from {sender}: '{text}'")
             
             # Parse commands
-            if text == "CAPTURE":
-                print("[*] Remote capture requested")
-                threading.Thread(target=capture_and_send, args=(sender,), daemon=True).start()
-                interface.sendText(f"📸 Capture started", destinationId=sender)
+            if text.startswith("CAPTURE"):
+                # Parse optional parameters: CAPTURE:res:qual
+                parts = text.split(':')
+                res = 720  # Default
+                qual = 70  # Default
+                
+                if len(parts) >= 2:
+                    try:
+                        res = int(parts[1])
+                    except ValueError:
+                        interface.sendText(f"❌ Invalid resolution: {parts[1]}", destinationId=sender)
+                        return
+                
+                if len(parts) >= 3:
+                    try:
+                        qual = int(parts[2])
+                    except ValueError:
+                        interface.sendText(f"❌ Invalid quality: {parts[2]}", destinationId=sender)
+                        return
+                
+                print(f"[*] Remote capture requested: {res}px @ Q{qual}")
+                threading.Thread(target=capture_and_send, args=(sender, "command", res, qual), daemon=True).start()
+                interface.sendText(f"📸 Capture started ({res}px Q{qual})", destinationId=sender)
             
             elif text == "MOTION_ON":
                 if not motion_detection_enabled:
@@ -233,7 +252,7 @@ def on_command(packet, interface):
                 print(f"[*] Status sent to {sender}")
             
             elif text == "HELP":
-                help_msg = "Commands: CAPTURE, MOTION_ON, MOTION_OFF, STATUS"
+                help_msg = "Commands: CAPTURE[:res[:qual]], MOTION_ON, MOTION_OFF, STATUS"
                 interface.sendText(help_msg, destinationId=sender)
     
     except Exception as e:
@@ -256,10 +275,10 @@ def main():
     print(f"Target Node: {target_id}")
     print(f"Motion Detection: {'ENABLED' if motion_detection_enabled else 'DISABLED'}")
     print("\nCommands:")
-    print("  CAPTURE     - Take photo immediately")
-    print("  MOTION_ON   - Enable motion detection")
-    print("  MOTION_OFF  - Disable motion detection")
-    print("  STATUS      - Get camera status")
+    print("  CAPTURE[:res[:qual]]  - Take photo immediately (e.g., CAPTURE:320:40)")
+    print("  MOTION_ON             - Enable motion detection")
+    print("  MOTION_OFF            - Disable motion detection")
+    print("  STATUS                - Get camera status")
     print("=" * 50)
     
     # Initialize camera for motion detection
