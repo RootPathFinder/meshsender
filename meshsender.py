@@ -334,7 +334,7 @@ class GalleryHandler(http.server.SimpleHTTPRequestHandler):
     </style>
     <script>
         let lastProgressHTML = '';
-        let lastGalleryHTML = '';
+        let lastImageList = '';
         
         function updateProgress() {
             fetch('/progress').then(r => r.json()).then(data => {
@@ -401,6 +401,13 @@ class GalleryHandler(http.server.SimpleHTTPRequestHandler):
                 const grid = document.getElementById('gallery-grid');
                 if (!grid) return;
                 
+                // Compare just the image list to detect changes
+                const imageListStr = JSON.stringify(data.images);
+                if (imageListStr === lastImageList) {
+                    return;  // No changes, skip DOM update
+                }
+                lastImageList = imageListStr;
+                
                 if (data.images.length === 0) {
                     grid.innerHTML = `
                         <div class='empty-state' style='grid-column: 1/-1;'>
@@ -411,14 +418,13 @@ class GalleryHandler(http.server.SimpleHTTPRequestHandler):
                             <p>Images will appear here when received via mesh</p>
                         </div>
                     `;
-                    lastGalleryHTML = '';
                     return;
                 }
                 
                 const newGalleryHTML = data.images.map(img => `
                     <div class='card'>
                         <a href='/gallery/${img}'>
-                            <img src='/gallery/${img}?t=${Date.now()}' alt='${img}'>
+                            <img src='/gallery/${img}' alt='${img}'>
                             <div class='card-info'>
                                 <small>${img}</small>
                             </div>
@@ -426,10 +432,7 @@ class GalleryHandler(http.server.SimpleHTTPRequestHandler):
                     </div>
                 `).join('');
                 
-                if (newGalleryHTML !== lastGalleryHTML) {
-                    grid.innerHTML = newGalleryHTML;
-                    lastGalleryHTML = newGalleryHTML;
-                }
+                grid.innerHTML = newGalleryHTML;
             }).catch(err => console.error('Failed to update gallery:', err));
         }
         
