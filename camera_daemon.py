@@ -132,17 +132,27 @@ def periodic_exposure_refresh():
 
 def capture_and_send(target_id, reason="command", res=720, qual=70, fast_mode=False):
     """Trigger a capture and send via takepic.py"""
-    global last_capture_time, picam2, last_frame, iface
+    global last_capture_time, picam2, last_frame, iface, exposure_refresh_stop, camera_lock
     
     print(f"\n[*] Triggering capture ({reason}) - {res}px @ Q{qual}...")
     last_capture_time = time.time()
     
     try:
+        # FIRST: Stop exposure refresh thread if it's running (it holds camera reference)
+        if exposure_refresh_stop is not None:
+            exposure_refresh_stop.set()
+            time.sleep(0.5)  # Let thread exit cleanly
+        
         # Release camera for takepic.py to use
         if picam2:
             print("[*] Releasing camera...")
-            picam2.stop()
-            picam2.close()
+            with camera_lock:
+                try:
+                    picam2.stop()
+                    picam2.close()
+                except Exception as e:
+                    print(f"[!] Error stopping camera: {e}")
+            
             picam2 = None
             last_frame = None
             time.sleep(2)  # Give camera time to fully release
@@ -192,7 +202,7 @@ def capture_and_send(target_id, reason="command", res=720, qual=70, fast_mode=Fa
         
         # Force another garbage collection and longer wait
         gc.collect()
-        time.sleep(3)  # Wait 3 seconds for all resources to be fully released
+        time.sleep(4)  # Wait 4 seconds for all resources to be fully released
         
         # Try to initialize camera with retries
         for attempt in range(3):
@@ -201,7 +211,7 @@ def capture_and_send(target_id, reason="command", res=720, qual=70, fast_mode=Fa
             if attempt < 2:
                 print(f"[*] Camera init failed, retrying... (attempt {attempt + 2}/3)")
                 gc.collect()
-                time.sleep(2)
+                time.sleep(3)
         
         if success:
             print(f"[+] Capture and send completed successfully")
@@ -213,7 +223,7 @@ def capture_and_send(target_id, reason="command", res=720, qual=70, fast_mode=Fa
         print(f"[X] Process timed out after 300 seconds")
         import gc
         gc.collect()
-        time.sleep(3)
+        time.sleep(4)
         initialize_camera()  # Ensure camera restarts even on timeout
         return False
     except Exception as e:
@@ -222,7 +232,7 @@ def capture_and_send(target_id, reason="command", res=720, qual=70, fast_mode=Fa
         traceback.print_exc()
         import gc
         gc.collect()
-        time.sleep(3)
+        time.sleep(4)
         initialize_camera()  # Ensure camera restarts even on error
         return False
 
@@ -279,11 +289,11 @@ def motion_detection_loop(target_id):
     exposure_refresh_thread = None
     
     while True:
-        time.sleep(0.5)  # Check twice per second
+        time.sleep(0.1)  # Check 10 times per second for faster motion detection
         check_counter += 1
         
-        # Show status every 60 seconds
-        if check_counter % 120 == 0:
+        # Show status every 60 seconds (600 checks at 0.1s interval)
+        if check_counter % 600 == 0:
             status = "ACTIVE" if motion_detection_enabled else "disabled"
             print(f"[*] Motion detection: {status}")
         
