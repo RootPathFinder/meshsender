@@ -237,7 +237,9 @@ def send_to_mesh(target_node, res, qual):
     
     # Send the WebP image
     if os.path.exists(IMAGE_PATH):
-        print(f"[*] Sending image ({os.path.getsize(IMAGE_PATH)} bytes)...")
+        file_size = os.path.getsize(IMAGE_PATH)
+        print(f"[*] Sending image ({res}px @ Q{qual}) - source file: {file_size} bytes")
+        print(f"    Note: Image will be resized during transfer (final payload will be smaller)")
         cmd = [
             PYTHON_BIN, SENDER_SCRIPT, "send", 
             target_node, IMAGE_PATH, 
