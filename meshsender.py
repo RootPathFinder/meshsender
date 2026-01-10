@@ -576,6 +576,11 @@ def on_receive(packet, interface):
     try:
         if 'decoded' in packet:
             decoded = packet['decoded']
+            # Debug: Show all incoming packets
+            port = decoded.get('portnum')
+            if port and port not in ['TEXT_MESSAGE_APP', 'NODEINFO_APP', 'POSITION_APP', 'TELEMETRY_APP']:
+                print(f"[DEBUG] Packet on port: {port}")
+            
             if decoded.get('portnum') == PORT_NUM or decoded.get('portnum') == 'PRIVATE_APP':
                 data = decoded.get('payload')
                 
