@@ -99,6 +99,18 @@ class GalleryHandler(http.server.SimpleHTTPRequestHandler):
             self.wfile.write(json.dumps(progress_data).encode())
             return
         
+        if self.path == '/api/images':
+            self.send_response(200)
+            self.send_header("Content-type", "application/json")
+            self.end_headers()
+            
+            # Get list of images sorted by most recent first (last 20)
+            images = sorted([f for f in os.listdir(GALLERY_DIR) if f.endswith(('.jpg', '.webp'))], reverse=True)[:20]
+            
+            import json
+            self.wfile.write(json.dumps({'images': images}).encode())
+            return
+        
         if self.path == '/' or self.path == '/index.html':
             self.send_response(200)
             self.send_header("Content-type", "text/html")
@@ -322,6 +334,7 @@ class GalleryHandler(http.server.SimpleHTTPRequestHandler):
     </style>
     <script>
         let lastProgressHTML = '';
+        let lastGalleryHTML = '';
         
         function updateProgress() {
             fetch('/progress').then(r => r.json()).then(data => {
@@ -383,8 +396,47 @@ class GalleryHandler(http.server.SimpleHTTPRequestHandler):
             });
         }
         
+        function updateGallery() {
+            fetch('/api/images').then(r => r.json()).then(data => {
+                const grid = document.getElementById('gallery-grid');
+                if (!grid) return;
+                
+                if (data.images.length === 0) {
+                    grid.innerHTML = `
+                        <div class='empty-state' style='grid-column: 1/-1;'>
+                            <svg fill='currentColor' viewBox='0 0 20 20'>
+                                <path d='M4 3a2 2 0 00-2 2v10a2 2 0 002 2h12a2 2 0 002-2V5a2 2 0 00-2-2H4zm12 12H4l4-8 3 6 2-4 3 6z'/>
+                            </svg>
+                            <h3>No images yet</h3>
+                            <p>Images will appear here when received via mesh</p>
+                        </div>
+                    `;
+                    lastGalleryHTML = '';
+                    return;
+                }
+                
+                const newGalleryHTML = data.images.map(img => `
+                    <div class='card'>
+                        <a href='/gallery/${img}'>
+                            <img src='/gallery/${img}?t=${Date.now()}' alt='${img}'>
+                            <div class='card-info'>
+                                <small>${img}</small>
+                            </div>
+                        </a>
+                    </div>
+                `).join('');
+                
+                if (newGalleryHTML !== lastGalleryHTML) {
+                    grid.innerHTML = newGalleryHTML;
+                    lastGalleryHTML = newGalleryHTML;
+                }
+            }).catch(err => console.error('Failed to update gallery:', err));
+        }
+        
         setInterval(updateProgress, 1000);
+        setInterval(updateGallery, 2000);
         updateProgress();
+        updateGallery();
     </script>
 </head>
 <body>
@@ -400,9 +452,15 @@ class GalleryHandler(http.server.SimpleHTTPRequestHandler):
         </div>
         
         <h2>Recent Images</h2>
+        <div id='gallery-grid' class='grid'></div>
+        <script>
+            // Initialize gallery on page load
+            updateGallery();
+        </script>
+        <div id='gallery-placeholder' style='display:none;'>
 """
             if images:
-                html += "<div class='grid'>"
+                html += "<div class='grid' style='display:none;'>"
                 for img in images:
                     html += f"""
                         <div class='card'>
@@ -426,6 +484,7 @@ class GalleryHandler(http.server.SimpleHTTPRequestHandler):
                     </div>
                 """
             html += """
+        </div>
     </div>
 </body>
 </html>
