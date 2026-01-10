@@ -938,6 +938,10 @@ def on_receive(packet, interface):
 
 def send_image(interface, target_id, file_path, res, qual, metadata=None):
     try:
+        # Convert res and qual to integers if they're strings
+        res = int(res) if isinstance(res, str) else res
+        qual = int(qual) if isinstance(qual, str) else qual
+        
         img = Image.open(file_path)
         img.thumbnail((res, res)) 
         
