@@ -126,118 +126,9 @@ class GalleryHandler(http.server.SimpleHTTPRequestHandler):
             return
         
         # Preview endpoint for in-progress transfers: /preview/<sender>/<transfer_id>
+        # Now simplified to just return placeholder progress - actual progressive preview disabled for WebP compatibility
         if self.path.startswith('/preview/'):
-            parts = self.path.split('/')
-            if len(parts) == 4:
-                sender = parts[2]
-                transfer_id_str = parts[3]
-                
-                # Try both formats: as int and as is
-                matching_keys = [k for k in image_buffer.keys() if k.startswith(sender + '_')]
-                
-                for buffer_key in matching_keys:
-                    data = image_buffer[buffer_key]
-                    received = sum(1 for x in data['chunks'] if x is not None)
-                    total = len(data['chunks'])
-                    
-                    if received == 0:
-                        continue  # Skip transfers with no data
-                    
-                    # Reconstruct partial image from received chunks
-                    partial_data = b''
-                    for chunk in data['chunks']:
-                        if chunk is not None:
-                            partial_data += chunk
-                    
-                    # Check file signatures
-                    is_jpeg = partial_data.startswith(b'\xff\xd8\xff')
-                    is_webp = partial_data.startswith(b'RIFF') and b'WEBP' in partial_data[:12]
-                    
-                    print(f"[Preview] {buffer_key}: {received}/{total} chunks, {len(partial_data)} bytes, compressed={data.get('compressed', False)}, jpeg={is_jpeg}, webp={is_webp}")
-                    
-                    if len(partial_data) > 50:  # Need at least some data
-                        try:
-                            # Decompress if needed
-                            image_data = partial_data
-                            if data.get('compressed', False):
-                                try:
-                                    image_data = zlib.decompress(partial_data)
-                                    print(f"[Preview] Decompressed {len(partial_data)} -> {len(image_data)} bytes")
-                                except Exception as de:
-                                    # Partial compressed data might not decompress yet
-                                    print(f"[Preview] Decompress failed: {str(de)[:50]}")
-                                    pass
-                            
-                            # For JPEG/WebP, allow truncated files
-                            from PIL import ImageFile
-                            ImageFile.LOAD_TRUNCATED_IMAGES = True
-                            
-                            # Detect format
-                            img_format = 'JPEG' if image_data.startswith(b'\xff\xd8\xff') else 'WEBP' if b'WEBP' in image_data[:20] else None
-                            if img_format:
-                                print(f"[Preview] Detected format: {img_format}")
-                            
-                            # Try to open as image
-                            img = Image.open(io.BytesIO(image_data))
-                            img.load()  # Force load to validate
-                            
-                            print(f"[Preview] Decoded image: {img.size} {img.format}")
-                            
-                            # Convert to progressive JPEG for smooth rendering
-                            output = io.BytesIO()
-                            img.save(output, format='JPEG', progressive=True, quality=85, optimize=False)
-                            preview_data = output.getvalue()
-                            
-                            self.send_response(200)
-                            self.send_header("Content-type", "image/jpeg")
-                            self.send_header("Content-length", len(preview_data))
-                            self.send_header("Cache-Control", "no-cache")
-                            self.end_headers()
-                            self.wfile.write(preview_data)
-                            return
-                        except Exception as e:
-                            # Can't decode yet - generate a placeholder showing progress
-                            print(f"[Preview] Decode failed: {str(e)[:80]}")
-                            try:
-                                placeholder = Image.new('RGB', (320, 240), color=(26, 31, 58))
-                                draw = ImageDraw.Draw(placeholder)
-                                
-                                # Draw progress bar
-                                progress_pct = int((received / total) * 100)
-                                bar_width = 280
-                                bar_height = 30
-                                bar_x = 20
-                                bar_y = 100
-                                
-                                # Background
-                                draw.rectangle([bar_x, bar_y, bar_x + bar_width, bar_y + bar_height], 
-                                             outline=(102, 126, 234), width=2)
-                                
-                                # Fill
-                                fill_width = int((bar_width * progress_pct) / 100)
-                                if fill_width > 0:
-                                    draw.rectangle([bar_x, bar_y, bar_x + fill_width, bar_y + bar_height],
-                                                 fill=(102, 126, 234))
-                                
-                                # Text
-                                text = f"{progress_pct}% ({received}/{total})"
-                                draw.text((160, 160), text, fill=(224, 230, 237), anchor="mm")
-                                
-                                output = io.BytesIO()
-                                placeholder.save(output, format='JPEG')
-                                preview_data = output.getvalue()
-                                
-                                self.send_response(200)
-                                self.send_header("Content-type", "image/jpeg")
-                                self.send_header("Content-length", len(preview_data))
-                                self.send_header("Cache-Control", "no-cache")
-                                self.end_headers()
-                                self.wfile.write(preview_data)
-                                return
-                            except:
-                                pass
-            
-            # If preview not available, return 404
+            # Return 404 - we show progress in the gallery grid instead
             self.send_response(404)
             self.end_headers()
             return
@@ -548,14 +439,13 @@ class GalleryHandler(http.server.SimpleHTTPRequestHandler):
                 if (data.previews && data.previews.length > 0) {
                     html += data.previews.map(p => `
                         <div class='card preview-card'>
-                            <div style='position: relative; width: 100%; height: 240px; background: #1a1f3a; display: flex; align-items: center; justify-content: center;'>
-                                <img src='${p.preview}?t=${Date.now()}' alt='preview' style='width: 100%; height: 100%; object-fit: cover;' onerror='this.style.display="none";'>
-                                <div style='position: absolute; bottom: 0; left: 0; right: 0; background: linear-gradient(to top, rgba(0,0,0,0.8), transparent); padding: 12px; color: #e0e6ed; font-size: 0.85rem;'>
-                                    <div style='font-weight: 600; margin-bottom: 4px;'>${p.sender}</div>
-                                    <div style='background: rgba(255,255,255,0.2); height: 4px; border-radius: 2px; overflow: hidden;'>
+                            <div style='position: relative; width: 100%; height: 240px; background: linear-gradient(135deg, #1a1f3a 0%, #252d47 100%); display: flex; align-items: center; justify-content: center;'>
+                                <div style='text-align: center; width: 100%;'>
+                                    <div style='margin-bottom: 20px; font-weight: 600; color: #667eea;'>${p.sender}</div>
+                                    <div style='background: rgba(255,255,255,0.1); height: 8px; border-radius: 4px; overflow: hidden; margin: 0 40px; margin-bottom: 12px;'>
                                         <div style='background: linear-gradient(90deg, #667eea 0%, #764ba2 100%); height: 100%; width: ${p.progress}%; transition: width 0.3s ease;'></div>
                                     </div>
-                                    <div style='margin-top: 4px; font-size: 0.75rem; opacity: 0.8;'>${p.progress}%</div>
+                                    <div style='color: #b8c1d8; font-size: 0.9rem;'>${p.progress}% Receiving...</div>
                                 </div>
                             </div>
                         </div>
