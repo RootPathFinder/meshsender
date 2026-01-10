@@ -832,8 +832,11 @@ def send_image(interface, target_id, file_path, res, qual, metadata=None):
             
             while not success and retry_count < max_retries:
                 try:
-                    interface.sendData(p_data, destinationId=target_id, portNum=PORT_NUM, wantAck=True)
+                    interface.sendData(p_data, destinationId=target_id, portNum='PRIVATE_APP', wantAck=True)
                     success = True
+                    # Debug first chunk
+                    if i == 0:
+                        print(f"\n[DEBUG] First chunk sent: {len(p_data)} bytes to {target_id} on port PRIVATE_APP")
                 except Exception as e:
                     retry_count += 1
                     total_retries += 1
