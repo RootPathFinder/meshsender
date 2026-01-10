@@ -13,6 +13,11 @@ venv/
 # Image Gallery (received images)
 gallery/
 
+# Captured images and metadata
+captured_image.jpg
+captured_image.jpg.meta
+*.jpg.meta
+
 # Editor dirs
 .vscode/
 .idea/

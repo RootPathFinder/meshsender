@@ -28,6 +28,8 @@ STALL_REQUEST_TIMEOUT = 20  # Request missing chunks after N seconds of no updat
 TRANSFER_TIMEOUT = 60  # Mark transfer as timed out after N seconds (adaptive)
 MAX_RETRIES = 3  # Maximum retry attempts per chunk (was 5)
 INITIAL_RETRY_DELAY = 3  # Initial retry delay in seconds
+VERBOSE = False  # Verbose logging mode
+DEBUG = False  # Debug logging mode (even more verbose)
 image_buffer = {}
 ack_messages = {}  # Store ACK messages from receivers: {sender_id: {transfer_id: [chunk_indices]}}
 completed_transfers = {}  # Track completed transfers: {sender_transfer_id: timestamp}
@@ -448,6 +450,16 @@ def start_web_server():
         httpd.serve_forever()
 
 # --- UTILS ---
+def log_verbose(msg):
+    """Print verbose log message"""
+    if VERBOSE or DEBUG:
+        print(msg)
+
+def log_debug(msg):
+    """Print debug log message"""
+    if DEBUG:
+        print(msg)
+
 def show_missing_chunks(sender):
     """Debug function to show which chunks are missing"""
     if sender in image_buffer:
@@ -663,13 +675,16 @@ def on_receive(packet, interface):
                     comp_str = ' (compressed)' if compressed_flag else ''
                     print(f"\n[!] Incoming Image from {sender} (ID: {transfer_id:08x}, {reported_total_size} bytes{comp_str})")
                     print(f"    Total chunks: {total_chunks}")
+                    log_debug(f"[DEBUG] New transfer: buffer_key={buffer_key}, CRC={crc_val:08x}")
                 
                 # Store the chunk (allow overwrites for retransmissions)
                 if image_buffer[buffer_key]['chunks'][chunk_index] is None:
                     print(f"  [RCV] Chunk {chunk_index}/{total_chunks-1} ({len(payload)} bytes)")
                     image_buffer[buffer_key]['bytes'] += len(payload)
+                    log_verbose(f"[VERBOSE] New chunk received: index={chunk_index}, size={len(payload)}")
                 else:
                     print(f"  [RETRY] Chunk {chunk_index}/{total_chunks-1} ({len(payload)} bytes)")
+                    log_verbose(f"[VERBOSE] Duplicate chunk (retransmission): index={chunk_index}")
                 
                 image_buffer[buffer_key]['chunks'][chunk_index] = payload
                 image_buffer[buffer_key]['last_update'] = time.time()
@@ -853,6 +868,8 @@ def send_image(interface, target_id, file_path, res, qual, metadata=None, chunk_
             header = transfer_id.to_bytes(4, 'big') + bytes([len(chunks), i, compressed_flag]) + crc_val.to_bytes(4, 'big') + total_size.to_bytes(4, 'big')
             p_data = header + chunk
             
+            log_debug(f"[DEBUG] Sending chunk {i+1}/{len(chunks)}: header={len(header)}B, payload={len(chunk)}B, total={len(p_data)}B")
+            
             success = False
             retry_count = 0
             max_retries = MAX_RETRIES
@@ -862,6 +879,7 @@ def send_image(interface, target_id, file_path, res, qual, metadata=None, chunk_
                     interface.sendData(p_data, destinationId=target_id, portNum=PORT_NUM, wantAck=True)
                     success = True
                     successful_chunks += 1
+                    log_verbose(f"[VERBOSE] Chunk {i+1}/{len(chunks)} sent successfully")
                 except Exception as e:
                     retry_count += 1
                     total_retries += 1
@@ -884,11 +902,16 @@ def send_image(interface, target_id, file_path, res, qual, metadata=None, chunk_
             # Adaptive delay based on success rate (if enabled)
             if ADAPTIVE_DELAY and i > 0:
                 success_rate = successful_chunks / (successful_chunks + failed_chunks) if (successful_chunks + failed_chunks) > 0 else 1.0
+                old_delay = current_delay
                 if success_rate < 0.9:  # If less than 90% success, increase delay
                     current_delay = min(MAX_CHUNK_DELAY, current_delay * 1.2)
                 elif success_rate > 0.98 and current_delay > MIN_CHUNK_DELAY:  # If great success, can reduce slightly
                     current_delay = max(MIN_CHUNK_DELAY, current_delay * 0.95)
+                
+                if abs(current_delay - old_delay) > 0.01:
+                    log_verbose(f"[VERBOSE] Adaptive delay adjusted: {old_delay:.2f}s -> {current_delay:.2f}s (success rate: {success_rate:.1%})")
             
+            log_debug(f"[DEBUG] Waiting {current_delay:.2f}s before next chunk")
             time.sleep(current_delay)
         
         print(f"\n[*] Initial send complete. Waiting for receiver...")
@@ -972,7 +995,21 @@ def main():
                         help="Disable adaptive chunk delay adjustment")
     parser.add_argument("--fast", action="store_true",
                         help="Fast mode: use minimum chunk delay (1s) and disable adaptive delay")
+    parser.add_argument("-v", "--verbose", action="store_true",
+                        help="Verbose logging mode")
+    parser.add_argument("--debug", action="store_true",
+                        help="Debug logging mode (very verbose)")
     args = parser.parse_args()
+    
+    # Update global logging settings
+    global VERBOSE, DEBUG
+    if args.debug:
+        DEBUG = True
+        VERBOSE = True
+        print("[*] Debug mode enabled")
+    elif args.verbose:
+        VERBOSE = True
+        print("[*] Verbose mode enabled")
     
     # Handle fast mode
     if args.fast:
