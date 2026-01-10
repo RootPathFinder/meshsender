@@ -47,6 +47,11 @@ target_id = None  # Default target for image transmission
 exposure_refresh_stop = threading.Event()  # Signal to stop exposure refresh thread
 camera_lock = threading.Lock()  # Protect camera access
 
+# Frame buffering for motion capture
+frame_buffer = None  # Holds the most recent full-res frame
+frame_buffer_lock = threading.Lock()  # Protect frame buffer access
+capture_frame_on_motion = False  # Flag to capture next motion-detected frame
+
 def initialize_camera():
     """Initialize camera for motion detection"""
     global picam2
@@ -62,6 +67,58 @@ def initialize_camera():
         return True
     except Exception as e:
         print(f"[X] Camera initialization failed: {e}")
+        return False
+
+def capture_full_resolution_frame():
+    """
+    Capture a high-resolution frame and save it to disk for sending.
+    This runs in the main motion detection camera - no subprocess needed.
+    """
+    global picam2, frame_buffer, frame_buffer_lock
+    
+    if not picam2:
+        return False
+    
+    try:
+        print("[*] Capturing high-res frame from buffer...")
+        
+        # Get the buffered preview frame dimensions
+        if frame_buffer is None:
+            print("[!] No buffered frame available, capturing now...")
+            return False
+        
+        # For speed, just use PIL to resize and save the buffered frame
+        # This avoids starting a new camera instance
+        from PIL import Image
+        import json
+        
+        # Convert buffered RGB frame to PIL Image
+        frame_pil = Image.fromarray(frame_buffer, 'RGB')
+        
+        # Load cached exposure settings for metadata
+        metadata_file = IMAGE_PATH + '.meta'
+        metadata = {'exposure': 0, 'gain': 0, 'red_gain': 1.0, 'blue_gain': 1.0}
+        if os.path.exists(metadata_file):
+            try:
+                with open(metadata_file, 'r') as f:
+                    metadata = json.load(f)
+            except:
+                pass
+        
+        # Save as WebP (quality 80 for good balance)
+        frame_pil.save(IMAGE_PATH, format='WEBP', quality=80)
+        print(f"[+] Captured frame saved to {IMAGE_PATH} ({os.path.getsize(IMAGE_PATH)} bytes)")
+        
+        # Save metadata
+        with open(metadata_file, 'w') as f:
+            json.dump(metadata, f)
+        
+        return True
+    
+    except Exception as e:
+        print(f"[X] Frame capture error: {e}")
+        import traceback
+        traceback.print_exc()
         return False
 
 def periodic_exposure_refresh():
@@ -131,87 +188,44 @@ def periodic_exposure_refresh():
             traceback.print_exc()
 
 def capture_and_send(target_id, reason="command", res=720, qual=70, fast_mode=False):
-    """Trigger a capture and send via takepic.py"""
-    global last_capture_time, picam2, last_frame, iface, exposure_refresh_stop, camera_lock
+    """
+    Capture and send image via mesh.
+    For motion-triggered captures, uses buffered frame from camera (instant).
+    """
+    global frame_buffer, frame_buffer_lock, iface, last_capture_time, picam2
     
     print(f"\n[*] Triggering capture ({reason}) - {res}px @ Q{qual}...")
     last_capture_time = time.time()
     
     try:
-        # FIRST: Stop exposure refresh thread if it's running (it holds camera reference)
-        if exposure_refresh_stop is not None:
-            exposure_refresh_stop.set()
-            time.sleep(0.5)  # Let thread exit cleanly
-        
-        # Release camera for takepic.py to use
-        if picam2:
-            print("[*] Releasing camera...")
-            with camera_lock:
-                try:
-                    picam2.stop()
-                    picam2.close()
-                except Exception as e:
-                    print(f"[!] Error stopping camera: {e}")
-            
-            picam2 = None
-            last_frame = None
-            time.sleep(2)  # Give camera time to fully release
-        
-        # Force garbage collection to clean up camera resources
-        import gc
-        gc.collect()
-        time.sleep(1)
-        
-        # Call takepic.py to capture only (no send, daemon will send)
-        cmd = [PYTHON_BIN, TAKEPIC_SCRIPT, target_id, "--res", str(res), "--qual", str(qual), "--no-send"]
-        
-        # Add --fast flag for motion-triggered captures
-        if fast_mode:
-            cmd.append("--fast")
-            print(f"[*] Fast capture mode (using cached settings)...")
+        # For motion events, use buffered frame (instant - no subprocess!)
+        # For commands, still capture from camera
+        if reason == "motion" and frame_buffer is not None:
+            print("[*] Using buffered frame for instant capture...")
+            if not capture_full_resolution_frame():
+                print("[!] Failed to use buffered frame")
+                return False
         else:
-            print(f"[*] Capturing...")
+            print("[*] Capturing fresh frame from camera...")
+            if not capture_full_resolution_frame():
+                print("[!] Failed to capture frame")
+                return False
         
-        result = subprocess.run(cmd, timeout=300)
-        
-        if result.returncode != 0:
-            print(f"[X] Capture failed with exit code: {result.returncode}")
-            time.sleep(3)  # Extra time before retrying to init camera
-            initialize_camera()
-            return False
-        
-        # Now send the image using daemon's Meshtastic interface
+        # Send the image
         if not iface:
             print(f"[X] No Meshtastic interface available")
-            time.sleep(3)
-            initialize_camera()
             return False
-            
+        
         print(f"[*] Sending to {target_id}...")
         
         # Send the WebP image
         if os.path.exists(IMAGE_PATH):
-            print(f"[*] Sending image ({os.path.getsize(IMAGE_PATH)} bytes)...")
+            file_size = os.path.getsize(IMAGE_PATH)
+            print(f"[*] Sending image ({file_size} bytes)...")
             success = meshsender_module.send_image(iface, target_id, IMAGE_PATH, res=res, qual=qual)
         else:
             print(f"[X] Image not found at {IMAGE_PATH}")
             success = False
-        
-        # Reinitialize camera for motion detection with retry logic
-        print("[*] Reinitializing camera...")
-        
-        # Force another garbage collection and longer wait
-        gc.collect()
-        time.sleep(4)  # Wait 4 seconds for all resources to be fully released
-        
-        # Try to initialize camera with retries
-        for attempt in range(3):
-            if initialize_camera():
-                break
-            if attempt < 2:
-                print(f"[*] Camera init failed, retrying... (attempt {attempt + 2}/3)")
-                gc.collect()
-                time.sleep(3)
         
         if success:
             print(f"[+] Capture and send completed successfully")
@@ -219,26 +233,16 @@ def capture_and_send(target_id, reason="command", res=720, qual=70, fast_mode=Fa
         else:
             print(f"[X] Send failed")
             return False
-    except subprocess.TimeoutExpired:
-        print(f"[X] Process timed out after 300 seconds")
-        import gc
-        gc.collect()
-        time.sleep(4)
-        initialize_camera()  # Ensure camera restarts even on timeout
-        return False
+    
     except Exception as e:
         print(f"[X] Capture error: {e}")
         import traceback
         traceback.print_exc()
-        import gc
-        gc.collect()
-        time.sleep(4)
-        initialize_camera()  # Ensure camera restarts even on error
         return False
 
 def detect_motion():
     """Detect motion using frame differencing"""
-    global last_frame, picam2
+    global last_frame, picam2, frame_buffer, frame_buffer_lock
     
     if not picam2:
         return False
@@ -246,6 +250,11 @@ def detect_motion():
     try:
         # Capture current frame
         frame = picam2.capture_array()
+        
+        # Buffer this frame for potential motion capture
+        with frame_buffer_lock:
+            frame_buffer = frame.copy()
+        
         gray = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
         gray = cv2.GaussianBlur(gray, (21, 21), 0)
         
