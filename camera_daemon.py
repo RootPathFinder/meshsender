@@ -303,16 +303,6 @@ def main():
                     # Subscribe to incoming messages
                     pub.subscribe(on_command, "meshtastic.receive")
                     
-                    # Send ready broadcast to channel 0
-                    try:
-                        my_node = iface.getMyNodeInfo()
-                        node_id = my_node.get('user', {}).get('id', 'unknown')
-                        ready_msg = f"📷 Trail camera ready | Motion: {'ON' if motion_detection_enabled else 'OFF'} | Node: {node_id}"
-                        iface.sendText(ready_msg, channelIndex=0)
-                        print(f"[+] Sent ready broadcast to channel 0")
-                    except Exception as e:
-                        print(f"[!] Could not send broadcast: {e}")
-                    
                     # Start motion detection thread (if not already running)
                     if motion_thread is None or not motion_thread.is_alive():
                         motion_thread = threading.Thread(
