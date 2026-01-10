@@ -197,6 +197,10 @@ def on_command(packet, interface):
             text = packet['decoded']['text'].strip()
             sender = packet.get('fromId', 'unknown')
             
+            # Ignore transfer protocol messages (REQ/ACK/OK)
+            if text.startswith(('REQ:', 'ACK:', 'OK:')):
+                return  # These are meshsender protocol messages, not commands
+            
             print(f"\n[CMD] Direct message from {sender}: '{text}'")
             
             # Parse commands
