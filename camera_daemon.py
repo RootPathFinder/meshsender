@@ -12,6 +12,7 @@ import sys
 import os
 import subprocess
 import threading
+import traceback
 import numpy as np
 import cv2
 from picamera2 import Picamera2
@@ -100,7 +101,7 @@ def create_4frame_grid(frames):
     Returns: Single PIL Image with 2x2 grid layout
     """
     if len(frames) != 4:
-        raise ValueError("Expected 4 frames for grid")
+        raise ValueError(f"Expected 4 frames for grid, got {len(frames)}")
     
     # Resize all frames to same size (use the first frame's size as reference)
     target_size = frames[0].size
@@ -178,7 +179,6 @@ def capture_4frame_motion_sequence():
     
     except Exception as e:
         print(f"[X] 4-frame capture error: {e}")
-        import traceback
         traceback.print_exc()
         return False
 
@@ -228,7 +228,6 @@ def capture_full_resolution_frame():
     
     except Exception as e:
         print(f"[X] Frame capture error: {e}")
-        import traceback
         traceback.print_exc()
         return False
 
@@ -273,7 +272,6 @@ def periodic_exposure_refresh():
                     )
                     
                     # Save new settings
-                    import json
                     metadata_file = IMAGE_PATH + '.meta'
                     metadata = {
                         'exposure': new_exposure / 1000,  # Convert to ms
@@ -293,7 +291,6 @@ def periodic_exposure_refresh():
         
         except Exception as e:
             print(f"[!] Exposure refresh error: {e}")
-            import traceback
             traceback.print_exc()
 
 def capture_and_send(target_id, reason="command", res=720, qual=70, fast_mode=False):
@@ -346,7 +343,6 @@ def capture_and_send(target_id, reason="command", res=720, qual=70, fast_mode=Fa
     
     except Exception as e:
         print(f"[X] Capture error: {e}")
-        import traceback
         traceback.print_exc()
         return False
 
