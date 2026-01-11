@@ -75,6 +75,116 @@ def initialize_camera():
         print(f"[X] Camera initialization failed: {e}")
         return False
 
+def capture_single_frame():
+    """
+    Capture a single frame from the camera and return it as a PIL Image.
+    Returns None on failure.
+    """
+    if not picam2:
+        return None
+    
+    try:
+        # Capture current frame from camera
+        frame = picam2.capture_array()
+        from PIL import Image
+        return Image.fromarray(frame, 'RGB')
+    except Exception as e:
+        print(f"[X] Single frame capture error: {e}")
+        return None
+
+def create_4frame_grid(frames):
+    """
+    Create a 2x2 grid from 4 frames.
+    frames: list of 4 PIL Images
+    Returns: Single PIL Image with 2x2 grid layout
+    """
+    from PIL import Image
+    
+    if len(frames) != 4:
+        raise ValueError("Expected 4 frames for grid")
+    
+    # Resize all frames to same size (use the first frame's size as reference)
+    target_size = frames[0].size
+    resized_frames = []
+    for frame in frames:
+        if frame.size != target_size:
+            resized_frames.append(frame.resize(target_size))
+        else:
+            resized_frames.append(frame)
+    
+    # Create 2x2 grid
+    width, height = target_size
+    grid_width = width * 2
+    grid_height = height * 2
+    
+    grid_image = Image.new('RGB', (grid_width, grid_height))
+    
+    # Place frames in grid (upper-left, upper-right, lower-left, lower-right)
+    grid_image.paste(resized_frames[0], (0, 0))           # Upper left
+    grid_image.paste(resized_frames[1], (width, 0))       # Upper right
+    grid_image.paste(resized_frames[2], (0, height))      # Lower left
+    grid_image.paste(resized_frames[3], (width, height))  # Lower right
+    
+    return grid_image
+
+def capture_4frame_motion_sequence():
+    """
+    Capture 4 frames at 1-second intervals for motion events.
+    Returns True on success, False on failure.
+    """
+    if not picam2:
+        return False
+    
+    try:
+        from PIL import Image
+        import json
+        
+        print("[*] Capturing 4-frame motion sequence...")
+        frames = []
+        
+        # Capture 4 frames with 1-second intervals
+        for i in range(4):
+            print(f"[*] Capturing frame {i+1}/4...")
+            frame = capture_single_frame()
+            if frame is None:
+                print(f"[!] Failed to capture frame {i+1}")
+                return False
+            frames.append(frame)
+            
+            # Wait 1 second before next frame (except after last frame)
+            if i < 3:
+                time.sleep(1.0)
+        
+        # Create 2x2 grid
+        print("[*] Creating 2x2 grid from 4 frames...")
+        grid_image = create_4frame_grid(frames)
+        
+        # Load cached exposure settings for metadata
+        metadata_file = IMAGE_PATH + '.meta'
+        metadata = {'exposure': 0, 'gain': 0, 'red_gain': 1.0, 'blue_gain': 1.0}
+        if os.path.exists(metadata_file):
+            try:
+                with open(metadata_file, 'r') as f:
+                    metadata = json.load(f)
+            except:
+                pass
+        
+        # Save as WebP (quality 80 for good balance)
+        grid_image.save(IMAGE_PATH, format='WEBP', quality=80)
+        print(f"[+] 4-frame grid saved to {IMAGE_PATH} ({os.path.getsize(IMAGE_PATH)} bytes)")
+        
+        # Save metadata
+        with open(metadata_file, 'w') as f:
+            json.dump(metadata, f)
+        
+        return True
+    
+    except Exception as e:
+        print(f"[X] 4-frame capture error: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
 def capture_full_resolution_frame():
     """
     Capture a high-resolution frame and save it to disk for sending.
@@ -193,7 +303,8 @@ def periodic_exposure_refresh():
 def capture_and_send(target_id, reason="command", res=720, qual=70, fast_mode=False):
     """
     Capture and send image via mesh.
-    For motion-triggered captures, uses buffered frame from camera (instant).
+    For motion-triggered captures, captures a 2x2 grid of 4 frames at 1-second intervals.
+    For command captures, uses single buffered frame.
     """
     global last_capture_time
     
@@ -201,14 +312,14 @@ def capture_and_send(target_id, reason="command", res=720, qual=70, fast_mode=Fa
     last_capture_time = time.time()
     
     try:
-        # For motion events, use buffered frame (instant - no subprocess!)
-        # For commands, still capture from camera
-        if reason == "motion" and frame_buffer is not None:
-            print("[*] Using buffered frame for instant capture...")
-            if not capture_full_resolution_frame():
-                print("[!] Failed to use buffered frame")
+        # For motion events, capture 4-frame sequence showing motion progression
+        if reason == "motion":
+            print("[*] Capturing 4-frame motion sequence (0s, 1s, 2s, 3s)...")
+            if not capture_4frame_motion_sequence():
+                print("[!] Failed to capture 4-frame sequence")
                 return False
         else:
+            # For commands, use single buffered frame (instant)
             print("[*] Capturing fresh frame from camera...")
             if not capture_full_resolution_frame():
                 print("[!] Failed to capture frame")
