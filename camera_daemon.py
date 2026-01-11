@@ -18,7 +18,7 @@ import cv2
 from picamera2 import Picamera2
 import importlib.util
 import json
-from PIL import Image
+from PIL import Image, ImageDraw, ImageFont
 
 # Import meshsender on_ack callback for ACK message handling
 spec = importlib.util.spec_from_file_location("meshsender_module", os.path.join(os.path.dirname(os.path.abspath(__file__)), "meshsender.py"))
@@ -55,6 +55,7 @@ iface = None  # Global Meshtastic interface
 target_id = None  # Default target for image transmission
 exposure_refresh_stop = threading.Event()  # Signal to stop exposure refresh thread
 camera_lock = threading.Lock()  # Protect camera access
+detected_object_type = None  # Store detected object type from motion detection
 
 # Frame buffering for motion capture
 frame_buffer = None  # Holds the most recent full-res frame
@@ -187,10 +188,13 @@ def capture_4frame_motion_sequence():
         traceback.print_exc()
         return False
 
-def capture_full_resolution_frame():
+def capture_full_resolution_frame(overlay_text=None):
     """
     Capture a high-resolution frame and save it to disk for sending.
     This runs in the main motion detection camera - no subprocess needed.
+    
+    Args:
+        overlay_text: Optional text to overlay on the image (e.g., "Motion: Person detected")
     """
     
     if not picam2:
@@ -209,6 +213,25 @@ def capture_full_resolution_frame():
         
         # Convert buffered RGB frame to PIL Image
         frame_pil = Image.fromarray(frame_buffer, 'RGB')
+        
+        # Add text overlay if provided
+        if overlay_text:
+            draw = ImageDraw.Draw(frame_pil)
+            # Use default font (PIL may not have custom fonts on Pi)
+            try:
+                font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 20)
+            except:
+                font = ImageFont.load_default()
+            
+            # Draw text with black background for visibility
+            text_bbox = draw.textbbox((0, 0), overlay_text, font=font)
+            text_width = text_bbox[2] - text_bbox[0]
+            text_height = text_bbox[3] - text_bbox[1]
+            
+            # Position at top-left with padding
+            x, y = 10, 10
+            draw.rectangle([x-5, y-5, x+text_width+5, y+text_height+5], fill='black')
+            draw.text((x, y), overlay_text, fill='white', font=font)
         
         # Load cached exposure settings for metadata
         metadata_file = IMAGE_PATH + '.meta'
@@ -301,27 +324,24 @@ def periodic_exposure_refresh():
 def capture_and_send(target_id, reason="command", res=480, qual=40, fast_mode=False):
     """
     Capture and send image via mesh.
-    For motion-triggered captures, captures a 2x2 grid of 4 frames at 1-second intervals.
-    For command captures, uses single buffered frame.
+    Uses single buffered frame for all captures.
     """
-    global last_capture_time
+    global last_capture_time, detected_object_type
     
     print(f"\n[*] Triggering capture ({reason}) - {res}px @ Q{qual}...")
     last_capture_time = time.time()
     
     try:
-        # For motion events, capture 4-frame sequence showing motion progression
-        if reason == "motion":
-            print("[*] Capturing 4-frame motion sequence (0s, 1s, 2s, 3s)...")
-            if not capture_4frame_motion_sequence():
-                print("[!] Failed to capture 4-frame sequence")
-                return False
-        else:
-            # For commands, capture single frame from buffered preview (instant)
-            print("[*] Capturing frame from buffer...")
-            if not capture_full_resolution_frame():
-                print("[!] Failed to capture frame")
-                return False
+        # Prepare overlay text for motion events
+        overlay_text = None
+        if reason == "motion" and detected_object_type:
+            overlay_text = f"Motion: {detected_object_type}"
+        
+        # Capture single frame from buffered preview
+        print("[*] Capturing frame from buffer...")
+        if not capture_full_resolution_frame(overlay_text):
+            print("[!] Failed to capture frame")
+            return False
         
         # Send the image
         if not iface:
@@ -351,9 +371,51 @@ def capture_and_send(target_id, reason="command", res=480, qual=40, fast_mode=Fa
         traceback.print_exc()
         return False
 
+def classify_motion_object(contour):
+    """
+    Classify detected motion based on contour characteristics.
+    Uses simple heuristics: aspect ratio, area, and shape to guess object type.
+    
+    Returns: String describing likely object type
+    """
+    try:
+        area = cv2.contourArea(contour)
+        x, y, w, h = cv2.boundingRect(contour)
+        aspect_ratio = float(w) / h if h > 0 else 1.0
+        
+        # Approximate contour to get shape complexity
+        perimeter = cv2.arcLength(contour, True)
+        approx = cv2.approxPolyDP(contour, 0.04 * perimeter, True)
+        vertices = len(approx)
+        
+        # Classify based on size and shape
+        # Person: typically tall (aspect ratio < 0.8), medium to large area
+        if area > 10000 and 0.3 < aspect_ratio < 0.8:
+            return "Person detected"
+        
+        # Small animal (cat/dog): medium area, roughly square
+        elif 3000 < area < 15000 and 0.7 < aspect_ratio < 1.5:
+            return "Animal (pet-sized)"
+        
+        # Small animal/bird: small area, variable aspect ratio
+        elif 500 < area < 3000:
+            return "Small animal/bird"
+        
+        # Large animal: large area, elongated
+        elif area > 15000 and aspect_ratio > 0.8:
+            return "Large animal/vehicle"
+        
+        # Unknown/general motion
+        else:
+            return f"Unknown object"
+            
+    except Exception as e:
+        print(f"[!] Classification error: {e}")
+        return "Unknown object"
+
 def detect_motion():
-    """Detect motion using frame differencing with contour analysis"""
-    global frame_buffer, last_frame
+    """Detect motion using frame differencing with contour analysis and object classification"""
+    global frame_buffer, last_frame, detected_object_type
     
     if not picam2:
         return False
@@ -401,7 +463,12 @@ def detect_motion():
         
         # Trigger if significant change (> 2.0% of frame in cohesive regions)
         if change_percent > 2.0:
+            # Classify object based on largest contour characteristics
+            largest_contour = max(significant_contours, key=cv2.contourArea)
+            detected_object_type = classify_motion_object(largest_contour)
+            
             print(f"[!] Motion detected! ({change_percent:.2f}% change, {len(significant_contours)} regions)")
+            print(f"    Detected: {detected_object_type}")
             return True
         
         # Only update reference frame when NO motion is detected
