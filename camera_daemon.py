@@ -172,8 +172,8 @@ def capture_4frame_motion_sequence():
                 # Use default metadata if file is corrupted or unreadable
                 pass
         
-        # Save as WebP (quality 80 for good balance)
-        grid_image.save(IMAGE_PATH, format='WEBP', quality=80)
+        # Save as WebP (quality 50 for compact LoRa transmission)
+        grid_image.save(IMAGE_PATH, format='WEBP', quality=50)
         print(f"[+] 4-frame grid saved to {IMAGE_PATH} ({os.path.getsize(IMAGE_PATH)} bytes)")
         
         # Save metadata
@@ -221,8 +221,8 @@ def capture_full_resolution_frame():
                 # Use default metadata if file is corrupted or unreadable
                 pass
         
-        # Save as WebP (quality 80 for good balance)
-        frame_pil.save(IMAGE_PATH, format='WEBP', quality=80)
+        # Save as WebP (quality 50 for compact LoRa transmission)
+        frame_pil.save(IMAGE_PATH, format='WEBP', quality=50)
         print(f"[+] Captured frame saved to {IMAGE_PATH} ({os.path.getsize(IMAGE_PATH)} bytes)")
         
         # Save metadata
@@ -298,7 +298,7 @@ def periodic_exposure_refresh():
             print(f"[!] Exposure refresh error: {e}")
             traceback.print_exc()
 
-def capture_and_send(target_id, reason="command", res=720, qual=70, fast_mode=False):
+def capture_and_send(target_id, reason="command", res=480, qual=40, fast_mode=False):
     """
     Capture and send image via mesh.
     For motion-triggered captures, captures a 2x2 grid of 4 frames at 1-second intervals.
