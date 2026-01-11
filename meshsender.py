@@ -644,7 +644,6 @@ def check_stalled_transfers(interface):
                 del image_buffer[buffer_key]
 
 def on_receive(packet, interface):
-    global image_buffer
     try:
         if 'decoded' in packet:
             decoded = packet['decoded']
