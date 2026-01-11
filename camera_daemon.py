@@ -162,7 +162,8 @@ def capture_4frame_motion_sequence():
             try:
                 with open(metadata_file, 'r') as f:
                     metadata = json.load(f)
-            except:
+            except (json.JSONDecodeError, IOError):
+                # Use default metadata if file is corrupted or unreadable
                 pass
         
         # Save as WebP (quality 80 for good balance)
@@ -211,7 +212,8 @@ def capture_full_resolution_frame():
             try:
                 with open(metadata_file, 'r') as f:
                     metadata = json.load(f)
-            except:
+            except (json.JSONDecodeError, IOError):
+                # Use default metadata if file is corrupted or unreadable
                 pass
         
         # Save as WebP (quality 80 for good balance)
@@ -313,8 +315,8 @@ def capture_and_send(target_id, reason="command", res=720, qual=70, fast_mode=Fa
                 print("[!] Failed to capture 4-frame sequence")
                 return False
         else:
-            # For commands, use single buffered frame (instant)
-            print("[*] Capturing fresh frame from camera...")
+            # For commands, capture single frame from buffered preview (instant)
+            print("[*] Capturing frame from buffer...")
             if not capture_full_resolution_frame():
                 print("[!] Failed to capture frame")
                 return False
