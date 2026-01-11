@@ -18,6 +18,7 @@ Recent updates have significantly improved transfer speed and reliability:
 - **⏱️ Adaptive Timeouts**: Transfer timeout scales with image size
 - **🔋 Power Efficient**: Optimized motion detection (50% lower CPU usage when idle)
 - **📊 Verbose Logging**: New `-v` and `--debug` flags for diagnostics
+- **🎬 4-Frame Motion Capture**: Motion events now capture a 2x2 grid showing progression over 3 seconds
 
 See [IMPROVEMENTS.md](IMPROVEMENTS.md) for detailed performance metrics and usage examples.
 
@@ -31,6 +32,7 @@ See [IMPROVEMENTS.md](IMPROVEMENTS.md) for detailed performance metrics and usag
 - **Auto-Exposure & Color Balance**: Intelligent image analysis with automatic exposure and color correction
 - **Over-exposure Detection**: Prevents blown highlights by analyzing preview images
 - **Transfer Metadata**: 10-byte headers with chunk indexing, CRC, and size information
+- **🎬 4-Frame Motion Capture**: Motion events capture 4 frames in a 2x2 grid showing motion progression over 3 seconds
 
 ## Requirements
 
@@ -241,6 +243,93 @@ For infrared/night vision cameras (like the Raspberry Pi Night Vision Camera wit
 - Color balance correction compensates for IR sensor characteristics
 - Supports exposure times up to 800ms and gain up to 8.0
 - Automatically disables auto white balance for better IR performance
+
+### Trail Camera Daemon with Motion Detection
+
+Use `camera_daemon.py` to run a continuous trail camera with motion detection and remote control:
+
+```bash
+python camera_daemon.py <default_target_id>
+```
+
+**Features:**
+
+- **Continuous Operation**: Runs as a daemon, always ready to capture
+- **Motion Detection**: OpenCV-based frame differencing with adaptive sensitivity
+- **Remote Commands**: Control via Meshtastic mesh messages
+- **🎬 4-Frame Motion Capture**: Captures a 2x2 grid of 4 frames when motion is detected
+- **Power Efficient**: Adaptive check intervals reduce CPU usage when idle
+- **Auto-Reconnect**: Automatic Meshtastic device reconnection with exponential backoff
+
+**Motion Capture Behavior:**
+
+When motion is detected, the daemon captures 4 frames in a 2x2 grid layout:
+- **Upper Left**: Initial motion frame (T=0s)
+- **Upper Right**: 1 second later (T=1s)
+- **Lower Left**: 2 seconds after initial (T=2s)
+- **Lower Right**: 3 seconds after initial (T=3s)
+
+This provides a visual timeline of the motion event, showing what triggered the camera and how the scene progressed over 3 seconds.
+
+**Remote Commands:**
+
+Send these commands as direct messages to the camera node:
+
+- `CAPTURE[:res[:qual]]` - Take a single-frame photo immediately (e.g., `CAPTURE:320:40`)
+- `MOTION_ON` - Enable motion detection
+- `MOTION_OFF` - Disable motion detection
+- `STATUS` - Get camera status and uptime
+- `HELP` - Show available commands
+
+**Example Usage:**
+
+```bash
+# Start the daemon (sends to node !da56b70c)
+python camera_daemon.py '!da56b70c'
+
+# From another node, send commands:
+# Enable motion detection
+# Send direct message: MOTION_ON
+
+# Request immediate capture
+# Send direct message: CAPTURE:720:70
+
+# Check status
+# Send direct message: STATUS
+```
+
+**Motion Detection Configuration:**
+
+The daemon uses adaptive check intervals for power efficiency:
+- **Active**: 0.5s checks after motion detected (high sensitivity)
+- **Idle**: Gradually increases to 2.0s when no motion (power saving)
+- **Cooldown**: 30 seconds between motion-triggered captures
+- **Threshold**: 0.5% frame change triggers motion event
+
+**Sample Output:**
+
+```
+[*] Motion detection: ACTIVE (interval: 0.5s)
+[!] Motion detected! (2.34% change)
+
+[*] Triggering capture (motion) - 720px @ Q70...
+[*] Capturing 4-frame motion sequence (0s, 1s, 2s, 3s)...
+[*] Capturing frame 1/4...
+[*] Capturing frame 2/4...
+[*] Capturing frame 3/4...
+[*] Capturing frame 4/4...
+[*] Creating 2x2 grid from 4 frames...
+[+] 4-frame grid saved to captured_image.webp (45234 bytes)
+[*] Sending to !da56b70c...
+[+] Capture and send completed successfully
+```
+
+**Comparison: Motion vs. Command Captures:**
+
+| Trigger | Frames | Layout | Use Case |
+|---------|--------|--------|----------|
+| Motion Detection | 4 frames | 2x2 grid | Shows motion progression over 3 seconds |
+| Manual Command | 1 frame | Single image | Immediate snapshot on demand |
 
 ## Transfer Configuration & Tuning
 
