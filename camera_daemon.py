@@ -36,6 +36,12 @@ IMAGE_PATH = os.path.join(SCRIPT_DIR, "captured_image.webp")
 PYTHON_BIN = sys.executable
 EXPOSURE_REFRESH_INTERVAL = 180  # Refresh exposure settings every 3 minutes
 
+# Motion detection configuration
+MOTION_NO_ACTIVITY_THRESHOLD = 10  # Checks with no motion before increasing interval
+MOTION_MAX_CHECK_INTERVAL = 2.0    # Maximum check interval when idle (seconds)
+MOTION_INTERVAL_INCREMENT = 0.1    # Amount to increase interval by (seconds)
+MOTION_DISABLED_CHECK_INTERVAL = 2.0  # Check interval when motion detection is disabled
+
 # Global state
 motion_detection_enabled = False
 last_capture_time = 0
@@ -294,14 +300,18 @@ def motion_detection_loop(target_id):
     check_counter = 0
     exposure_refresh_thread = None
     
+    # Adaptive check interval based on activity
+    check_interval = 1.0  # Start with 1 second (was 0.5s - more power efficient)
+    no_motion_count = 0
+    
     while True:
-        time.sleep(0.1)  # Check 10 times per second for faster motion detection
+        time.sleep(check_interval)
         check_counter += 1
         
-        # Show status every 60 seconds (600 checks at 0.1s interval)
-        if check_counter % 600 == 0:
+        # Show status every 60 seconds
+        if check_counter % int(60 / check_interval) == 0:
             status = "ACTIVE" if motion_detection_enabled else "disabled"
-            print(f"[*] Motion detection: {status}")
+            print(f"[*] Motion detection: {status} (interval: {check_interval}s)")
         
         # Initialize camera and start exposure refresh thread when motion detection is enabled
         if motion_detection_enabled and picam2 is None:
@@ -334,6 +344,8 @@ def motion_detection_loop(target_id):
             continue
         
         if not motion_detection_enabled:
+            # When disabled, check less frequently to save power
+            check_interval = MOTION_DISABLED_CHECK_INTERVAL
             continue
         
         # Check cooldown
@@ -342,13 +354,14 @@ def motion_detection_loop(target_id):
         
         # Detect motion
         if detect_motion():
-            # Use fast_mode=True for motion captures: uses cached exposure settings, skips auto-adjust
-            # Run async to keep motion detection loop responsive
-            threading.Thread(
-                target=capture_and_send, 
-                args=(target_id, "motion", 720, 70, True), 
-                daemon=True
-            ).start()
+            capture_and_send(target_id, reason="motion")
+            check_interval = 0.5  # Check more frequently after motion detected
+            no_motion_count = 0
+        else:
+            no_motion_count += 1
+            # Gradually increase interval if no motion (power saving)
+            if no_motion_count > MOTION_NO_ACTIVITY_THRESHOLD and check_interval < MOTION_MAX_CHECK_INTERVAL:
+                check_interval = min(MOTION_MAX_CHECK_INTERVAL, check_interval + MOTION_INTERVAL_INCREMENT)
 
 def on_command(packet, interface):
     """Handle incoming mesh commands"""
@@ -452,6 +465,8 @@ def main():
     
     # Connection loop with auto-reconnect
     motion_thread = None
+    reconnect_delay = 10  # Start with 10 second delay
+    max_reconnect_delay = 300  # Max 5 minutes between reconnect attempts
     
     try:
         while True:
@@ -461,6 +476,9 @@ def main():
                     print("\n[*] Connecting to Meshtastic device...")
                     iface = meshtastic.serial_interface.SerialInterface(connectNow=True)
                     print("[+] Connected successfully")
+                    
+                    # Reset reconnect delay on successful connection
+                    reconnect_delay = 10
                     
                     # Subscribe to incoming messages
                     pub.subscribe(on_command, "meshtastic.receive")
@@ -493,7 +511,7 @@ def main():
                 
             except Exception as e:
                 print(f"\n[!] Connection error: {e}")
-                print("[*] Attempting to reconnect in 10 seconds...")
+                print(f"[*] Attempting to reconnect in {reconnect_delay}s...")
                 
                 # Cleanup old interface
                 if iface:
@@ -503,7 +521,10 @@ def main():
                         pass
                     iface = None
                 
-                time.sleep(10)
+                time.sleep(reconnect_delay)
+                
+                # Exponential backoff: 10s, 20s, 40s, 80s, up to 5 minutes
+                reconnect_delay = min(max_reconnect_delay, reconnect_delay * 2)
     
     except KeyboardInterrupt:
         print("\n\n[*] Shutting down camera daemon...")
