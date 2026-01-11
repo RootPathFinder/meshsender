@@ -361,8 +361,9 @@ def detect_motion():
         return False
     
     try:
-        # Capture current frame
-        frame = picam2.capture_array()
+        # Capture current frame with lock protection
+        with camera_lock:
+            frame = picam2.capture_array()
         
         # Buffer this frame for potential motion capture
         with frame_buffer_lock:
