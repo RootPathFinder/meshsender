@@ -82,6 +82,7 @@ def capture_single_frame():
     """
     Capture a single frame from the camera and return it as a PIL Image.
     Returns None on failure.
+    Caller should hold camera_lock before calling this function.
     """
     if not picam2:
         return None
@@ -131,6 +132,10 @@ def capture_4frame_motion_sequence():
     """
     Capture 4 frames at 1-second intervals for motion events.
     Returns True on success, False on failure.
+    
+    Note: This function takes ~3 seconds to complete (4 frames with 1s intervals).
+    The motion detection loop will be blocked during this time, but the 30-second
+    cooldown prevents rapid repeated captures anyway.
     """
     if not picam2:
         return False
@@ -140,19 +145,21 @@ def capture_4frame_motion_sequence():
         frames = []
         
         # Capture 4 frames with 1-second intervals
-        for i in range(4):
-            print(f"[*] Capturing frame {i+1}/4...")
-            frame = capture_single_frame()
-            if frame is None:
-                print(f"[!] Failed to capture frame {i+1}")
-                return False
-            frames.append(frame)
-            
-            # Wait 1 second before next frame (except after last frame)
-            if i < 3:
-                time.sleep(1.0)
+        # Use camera_lock to prevent concurrent access during capture
+        with camera_lock:
+            for i in range(4):
+                print(f"[*] Capturing frame {i+1}/4...")
+                frame = capture_single_frame()
+                if frame is None:
+                    print(f"[!] Failed to capture frame {i+1}")
+                    return False
+                frames.append(frame)
+                
+                # Wait 1 second before next frame (except after last frame)
+                if i < 3:
+                    time.sleep(1.0)
         
-        # Create 2x2 grid
+        # Create 2x2 grid (outside lock - no camera access needed)
         print("[*] Creating 2x2 grid from 4 frames...")
         grid_image = create_4frame_grid(frames)
         
