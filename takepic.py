@@ -11,7 +11,8 @@ from picamera2 import Picamera2
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # Relative paths (can be customized as needed)
-IMAGE_PATH = os.path.join(SCRIPT_DIR, "captured_image.jpg")
+IMAGE_PATH_TEMP = os.path.join(SCRIPT_DIR, "captured_image_temp.jpg")  # Temporary capture
+IMAGE_PATH = os.path.join(SCRIPT_DIR, "captured_image.webp")  # Final WebP
 SENDER_SCRIPT = os.path.join(SCRIPT_DIR, "meshsender.py")
 
 # Use the current Python interpreter
@@ -156,21 +157,43 @@ def auto_adjust_exposure(picam2, target_brightness=90, max_iterations=5):
     print(f"    Color Gains: Red={red_gain:.2f}, Blue={blue_gain:.2f}")
     return exposure, gain, red_gain, blue_gain
 
-def capture_night_image():
+def capture_night_image(use_cached_settings=False):
     picam2 = Picamera2()
     
-    # Configure for low-res preview first
-    preview_config = picam2.create_preview_configuration(
-        main={"format": "RGB888", "size": (640, 480)},
-        controls={"FrameDurationLimits": (100000, 1000000)}
-    )
-    picam2.configure(preview_config)
-    picam2.start()
+    # Try to load cached settings if fast capture requested
+    optimal_exposure, optimal_gain, optimal_red_gain, optimal_blue_gain = None, None, None, None
     
-    # Auto-adjust exposure and color balance
-    optimal_exposure, optimal_gain, optimal_red_gain, optimal_blue_gain = auto_adjust_exposure(picam2)
+    if use_cached_settings:
+        import json
+        metadata_file = IMAGE_PATH + '.meta'
+        if os.path.exists(metadata_file):
+            try:
+                with open(metadata_file, 'r') as f:
+                    metadata = json.load(f)
+                    optimal_exposure = int(metadata['exposure'] * 1000)
+                    optimal_gain = metadata['gain']
+                    optimal_red_gain = metadata['red_gain']
+                    optimal_blue_gain = metadata['blue_gain']
+                    print(f"[+] Loaded cached exposure settings (fast mode)")
+                    print(f"    Exposure={optimal_exposure/1000:.1f}ms, Gain={optimal_gain:.1f}")
+            except Exception as e:
+                print(f"[!] Failed to load cached settings: {e}")
+                use_cached_settings = False
     
-    picam2.stop()
+    # If no cached settings or fast mode disabled, do auto-adjustment
+    if not use_cached_settings or optimal_exposure is None:
+        # Configure for low-res preview first
+        preview_config = picam2.create_preview_configuration(
+            main={"format": "RGB888", "size": (640, 480)},
+            controls={"FrameDurationLimits": (100000, 1000000)}
+        )
+        picam2.configure(preview_config)
+        picam2.start()
+        
+        # Auto-adjust exposure and color balance
+        optimal_exposure, optimal_gain, optimal_red_gain, optimal_blue_gain = auto_adjust_exposure(picam2)
+        
+        picam2.stop()
     
     # Now configure for full resolution
     config = picam2.create_still_configuration(
@@ -195,9 +218,27 @@ def capture_night_image():
     time.sleep(1.5)
     
     print("[*] Capturing final image...")
-    picam2.capture_file(IMAGE_PATH)
+    picam2.capture_file(IMAGE_PATH_TEMP)  # Capture as JPEG first
     picam2.stop()
-    print(f"[+] Image saved to {IMAGE_PATH}")
+    print(f"[+] Image captured to {IMAGE_PATH_TEMP}")
+    
+    # Convert to WebP for sending
+    print("[*] Converting to WebP...")
+    try:
+        from PIL import Image
+        # Open the captured JPEG
+        img = Image.open(IMAGE_PATH_TEMP)
+        print(f"[+] Opened captured image: {img.size} {img.format}")
+        
+        # Convert to WebP for sending
+        img.save(IMAGE_PATH, format='WEBP', quality=80)
+        print(f"[+] WebP image saved to {IMAGE_PATH}")
+        print(f"    WebP file size: {os.path.getsize(IMAGE_PATH)} bytes")
+    except Exception as e:
+        print(f"[X] Image processing failed: {e}")
+        import traceback
+        traceback.print_exc()
+        return  # Don't continue if image processing failed
     
     # Save camera metadata for overlay
     import json
@@ -213,17 +254,27 @@ def capture_night_image():
 
 def send_to_mesh(target_node, res, qual):
     print(f"[*] Sending to Node: {target_node}")
-    cmd = [
-        PYTHON_BIN, SENDER_SCRIPT, "send", 
-        target_node, IMAGE_PATH, 
-        "--res", res, "--qual", qual
-    ]
+    print(f"    Image path: {IMAGE_PATH}")
+    print(f"    Image exists: {os.path.exists(IMAGE_PATH)}")
     
-    result = subprocess.run(cmd)
-    if result.returncode == 0:
-        print("[+] Transmission finished successfully.")
+    # Send the WebP image
+    if os.path.exists(IMAGE_PATH):
+        file_size = os.path.getsize(IMAGE_PATH)
+        print(f"[*] Sending image ({res}px @ Q{qual}) - source file: {file_size} bytes")
+        print(f"    Note: Image will be resized during transfer (final payload will be smaller)")
+        cmd = [
+            PYTHON_BIN, SENDER_SCRIPT, "send", 
+            target_node, IMAGE_PATH, 
+            "--res", res, "--qual", qual
+        ]
+        print(f"    Running: {' '.join(cmd)}")
+        result = subprocess.run(cmd, capture_output=False)
+        if result.returncode == 0:
+            print("[+] Image transmission finished successfully.")
+        else:
+            print("[X] Error: Image transmission failed.")
     else:
-        print("[X] Error: Meshtastic transmission failed.")
+        print(f"[!] Image not found at {IMAGE_PATH}")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Capture and send image via Meshtastic")
@@ -231,11 +282,12 @@ if __name__ == "__main__":
     parser.add_argument("--res", default="720", help="Image resolution (default: 720)")
     parser.add_argument("--qual", default="70", help="JPEG quality (default: 70)")
     parser.add_argument("--no-send", action="store_true", help="Capture only, skip mesh send")
+    parser.add_argument("--fast", action="store_true", help="Fast capture mode using cached exposure settings (for motion detection)")
     
     args = parser.parse_args()
     
     try:
-        capture_night_image()
+        capture_night_image(use_cached_settings=args.fast)
         if not args.no_send:
             send_to_mesh(args.target_id, args.res, args.qual)
     except Exception as e:

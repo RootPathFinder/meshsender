@@ -115,6 +115,20 @@ class GalleryHandler(http.server.SimpleHTTPRequestHandler):
             self.wfile.write(json.dumps(progress_data).encode())
             return
         
+        if self.path == '/api/images':
+            self.send_response(200)
+            self.send_header("Content-type", "application/json")
+            self.end_headers()
+            
+            # Get completed images
+            images = sorted([f for f in os.listdir(GALLERY_DIR) if f.endswith(('.jpg', '.webp'))], reverse=True)[:20]
+            
+            import json
+            self.wfile.write(json.dumps({'images': images}).encode())
+            return
+        
+
+        
         if self.path == '/' or self.path == '/index.html':
             self.send_response(200)
             self.send_header("Content-type", "text/html")
@@ -337,6 +351,7 @@ class GalleryHandler(http.server.SimpleHTTPRequestHandler):
         }
     </style>
     <script>
+        let lastImageList = '';
         let lastProgressHTML = '';
         
         function updateProgress() {
@@ -399,8 +414,56 @@ class GalleryHandler(http.server.SimpleHTTPRequestHandler):
             });
         }
         
+        function updateGallery() {
+            fetch('/api/images').then(r => r.json()).then(data => {
+                const grid = document.getElementById('gallery-grid');
+                if (!grid) return;
+                
+                // Compare image data to detect changes
+                const imageListStr = JSON.stringify({
+                    images: data.images
+                });
+                if (imageListStr === lastImageList) {
+                    return;  // No changes, skip DOM update
+                }
+                lastImageList = imageListStr;
+                
+                let html = '';
+                
+                // Add completed images
+                if (data.images && data.images.length > 0) {
+                    html += data.images.map(img => `
+                        <div class='card'>
+                            <a href='/gallery/${img}'>
+                                <img src='/gallery/${img}' alt='${img}'>
+                                <div class='card-info'>
+                                    <small>${img}</small>
+                                </div>
+                            </a>
+                        </div>
+                    `).join('');
+                }
+                
+                if (!html) {
+                    html = `
+                        <div class='empty-state' style='grid-column: 1/-1;'>
+                            <svg fill='currentColor' viewBox='0 0 20 20'>
+                                <path d='M4 3a2 2 0 00-2 2v10a2 2 0 002 2h12a2 2 0 002-2V5a2 2 0 00-2-2H4zm12 12H4l4-8 3 6 2-4 3 6z'/>
+                            </svg>
+                            <h3>No images yet</h3>
+                            <p>Images will appear here when received via mesh</p>
+                        </div>
+                    `;
+                }
+                
+                grid.innerHTML = html;
+            }).catch(err => console.error('Failed to update gallery:', err));
+        }
+        
         setInterval(updateProgress, 1000);
+        setInterval(updateGallery, 500);
         updateProgress();
+        updateGallery();
     </script>
 </head>
 <body>
@@ -416,9 +479,15 @@ class GalleryHandler(http.server.SimpleHTTPRequestHandler):
         </div>
         
         <h2>Recent Images</h2>
+        <div id='gallery-grid' class='grid'></div>
+        <script>
+            // Initialize gallery on page load
+            updateGallery();
+        </script>
+        <div id='gallery-placeholder' style='display:none;'>
 """
             if images:
-                html += "<div class='grid'>"
+                html += "<div class='grid' style='display:none;'>"
                 for img in images:
                     html += f"""
                         <div class='card'>
@@ -442,6 +511,7 @@ class GalleryHandler(http.server.SimpleHTTPRequestHandler):
                     </div>
                 """
             html += """
+        </div>
     </div>
 </body>
 </html>
@@ -519,7 +589,6 @@ def add_diagnostic_overlay(img, stats_text, metadata=None):
 # --- MESH LOGIC ---
 def on_ack(packet, interface):
     """Handle ACK messages from receiver"""
-    global ack_messages
     try:
         if 'decoded' in packet:
             decoded = packet['decoded']
@@ -602,7 +671,6 @@ def check_stalled_transfers(interface):
                 del image_buffer[buffer_key]
 
 def on_receive(packet, interface):
-    global image_buffer
     try:
         if 'decoded' in packet:
             decoded = packet['decoded']
@@ -737,7 +805,9 @@ def on_receive(packet, interface):
                         # Detect format and save accordingly
                         img_format = img.format if img.format else 'JPEG'
                         ext = 'webp' if img_format == 'WEBP' else 'jpg'
-                        fname = f"{GALLERY_DIR}/img_{int(time.time())}.{ext}"
+                        # Use transfer_id in filename to support multiple concurrent transfers
+                        sender_short = sender.replace('!', '')[-6:] if sender else 'unknown'
+                        fname = f"{GALLERY_DIR}/img_{sender_short}_{transfer_id:08x}.{ext}"
                         img.save(fname)
                         duration = time.time() - image_buffer[buffer_key]['start']
                         print(f"\n[SUCCESS] {len(full)} bytes in {duration:.1f}s")
@@ -782,6 +852,10 @@ def send_image(interface, target_id, file_path, res, qual, metadata=None, chunk_
     chunk_delay = max(MIN_CHUNK_DELAY, min(MAX_CHUNK_DELAY, chunk_delay))
     
     try:
+        # Convert res and qual to integers if they're strings
+        res = int(res) if isinstance(res, str) else res
+        qual = int(qual) if isinstance(qual, str) else qual
+        
         img = Image.open(file_path)
         img.thumbnail((res, res)) 
         
@@ -981,11 +1055,14 @@ def send_image(interface, target_id, file_path, res, qual, metadata=None, chunk_
         print(f"Avg Speed : {avg_speed:.2f} B/s")
         print(f"Retries   : {total_retries}")
         print(f"------------------------\n")
+        
+        return transfer_complete
 
     except Exception as e:
         import traceback
         print(f"\n[X] Error: {e}")
         traceback.print_exc()
+        return False
 
 def main():
     parser = argparse.ArgumentParser(description="Meshsender - Send and receive images over Meshtastic LoRa mesh")
