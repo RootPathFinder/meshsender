@@ -354,7 +354,7 @@ def capture_and_send(target_id, reason="command", res=720, qual=70, fast_mode=Fa
         return False
 
 def detect_motion():
-    """Detect motion using frame differencing"""
+    """Detect motion using frame differencing with contour analysis"""
     global frame_buffer, last_frame
     
     if not picam2:
@@ -379,23 +379,37 @@ def detect_motion():
         
         # Compute difference
         frame_delta = cv2.absdiff(last_frame, gray)
-        thresh = cv2.threshold(frame_delta, 25, 255, cv2.THRESH_BINARY)[1]
+        thresh = cv2.threshold(frame_delta, 30, 255, cv2.THRESH_BINARY)[1]
         thresh = cv2.dilate(thresh, None, iterations=2)
         
-        # Calculate percentage of changed pixels
-        changed_pixels = np.sum(thresh > 0)
-        total_pixels = thresh.size
-        change_percent = (changed_pixels / total_pixels) * 100
+        # Find contours to filter out scattered noise pixels
+        contours, _ = cv2.findContours(thresh.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         
-        # Trigger if significant change (> 0.5% of frame for faster detection)
-        if change_percent > 0.5:
-            print(f"[!] Motion detected! ({change_percent:.2f}% change)")
+        # Filter contours: only count significant ones (min 500 pixels area)
+        # This eliminates random noise pixels scattered across the frame
+        min_contour_area = 500
+        significant_contours = [c for c in contours if cv2.contourArea(c) >= min_contour_area]
+        
+        # Calculate percentage of changed pixels in significant contours only
+        if not significant_contours:
+            # No significant motion regions found
+            last_frame = cv2.addWeighted(last_frame, 0.90, gray, 0.10, 0)
+            return False
+        
+        # Sum area of significant contours
+        total_motion_area = sum(cv2.contourArea(c) for c in significant_contours)
+        total_pixels = thresh.size
+        change_percent = (total_motion_area / total_pixels) * 100
+        
+        # Trigger if significant change (> 2.0% of frame in cohesive regions)
+        if change_percent > 2.0:
+            print(f"[!] Motion detected! ({change_percent:.2f}% change, {len(significant_contours)} regions)")
             return True
         
         # Only update reference frame when NO motion is detected
         # This prevents the background model from adapting to moving objects
-        # Use very slow adaptation (95% old, 5% new) during quiet periods
-        last_frame = cv2.addWeighted(last_frame, 0.95, gray, 0.05, 0)
+        # Use slow adaptation (90% old, 10% new) to handle gradual lighting changes
+        last_frame = cv2.addWeighted(last_frame, 0.90, gray, 0.10, 0)
         
         return False
         
