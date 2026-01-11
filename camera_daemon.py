@@ -125,8 +125,6 @@ def periodic_exposure_refresh():
     Background thread that periodically refreshes exposure settings while motion detection is active.
     This ensures cached settings stay current with lighting conditions.
     """
-    global motion_detection_enabled
-    
     print("[*] Exposure refresh thread started")
     
     while not exposure_refresh_stop.is_set():
@@ -241,7 +239,7 @@ def capture_and_send(target_id, reason="command", res=720, qual=70, fast_mode=Fa
 
 def detect_motion():
     """Detect motion using frame differencing"""
-    global frame_buffer, frame_buffer_lock
+    global frame_buffer, last_frame
     
     if not picam2:
         return False
@@ -290,7 +288,7 @@ def detect_motion():
 
 def motion_detection_loop(target_id):
     """Continuous motion detection loop"""
-    global motion_detection_enabled, picam2
+    global picam2
     
     print("[*] Motion detection loop started")
     check_counter = 0
