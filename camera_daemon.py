@@ -74,7 +74,6 @@ def capture_full_resolution_frame():
     Capture a high-resolution frame and save it to disk for sending.
     This runs in the main motion detection camera - no subprocess needed.
     """
-    global picam2, frame_buffer, frame_buffer_lock
     
     if not picam2:
         return False
@@ -126,7 +125,7 @@ def periodic_exposure_refresh():
     Background thread that periodically refreshes exposure settings while motion detection is active.
     This ensures cached settings stay current with lighting conditions.
     """
-    global picam2, motion_detection_enabled, exposure_refresh_stop, camera_lock
+    global motion_detection_enabled
     
     print("[*] Exposure refresh thread started")
     
@@ -192,7 +191,7 @@ def capture_and_send(target_id, reason="command", res=720, qual=70, fast_mode=Fa
     Capture and send image via mesh.
     For motion-triggered captures, uses buffered frame from camera (instant).
     """
-    global frame_buffer, frame_buffer_lock, iface, last_capture_time, picam2
+    global last_capture_time
     
     print(f"\n[*] Triggering capture ({reason}) - {res}px @ Q{qual}...")
     last_capture_time = time.time()
@@ -242,7 +241,7 @@ def capture_and_send(target_id, reason="command", res=720, qual=70, fast_mode=Fa
 
 def detect_motion():
     """Detect motion using frame differencing"""
-    global last_frame, picam2, frame_buffer, frame_buffer_lock
+    global frame_buffer, frame_buffer_lock
     
     if not picam2:
         return False
@@ -291,7 +290,7 @@ def detect_motion():
 
 def motion_detection_loop(target_id):
     """Continuous motion detection loop"""
-    global motion_detection_enabled, last_capture_time, picam2, exposure_refresh_stop, camera_lock
+    global motion_detection_enabled, picam2
     
     print("[*] Motion detection loop started")
     check_counter = 0
@@ -355,7 +354,7 @@ def motion_detection_loop(target_id):
 
 def on_command(packet, interface):
     """Handle incoming mesh commands"""
-    global motion_detection_enabled, target_id
+    global motion_detection_enabled
     
     try:
         if 'decoded' in packet and 'text' in packet['decoded']:

@@ -566,7 +566,6 @@ def add_diagnostic_overlay(img, stats_text, metadata=None):
 # --- MESH LOGIC ---
 def on_ack(packet, interface):
     """Handle ACK messages from receiver"""
-    global ack_messages
     try:
         if 'decoded' in packet:
             decoded = packet['decoded']
