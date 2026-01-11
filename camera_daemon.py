@@ -99,19 +99,17 @@ def create_4frame_grid(frames):
     """
     Create a 2x2 grid from 4 frames.
     frames: list of 4 PIL Images
-    Returns: Single PIL Image with 2x2 grid layout
+    Returns: Single PIL Image with 2x2 grid layout (each frame 320x240)
     """
     if len(frames) != 4:
         raise ValueError(f"Expected 4 frames for grid, got {len(frames)}")
     
-    # Resize all frames to same size (use the first frame's size as reference)
-    target_size = frames[0].size
+    # Resize each frame to 320x240 for compact grid (total: 640x480)
+    # This keeps the final grid small for LoRa transmission
+    target_size = (320, 240)
     resized_frames = []
     for frame in frames:
-        if frame.size != target_size:
-            resized_frames.append(frame.resize(target_size))
-        else:
-            resized_frames.append(frame)
+        resized_frames.append(frame.resize(target_size, Image.Resampling.LANCZOS))
     
     # Create 2x2 grid
     width, height = target_size
