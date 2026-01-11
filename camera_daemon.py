@@ -16,6 +16,8 @@ import numpy as np
 import cv2
 from picamera2 import Picamera2
 import importlib.util
+import json
+from PIL import Image
 
 # Import meshsender on_ack callback for ACK message handling
 spec = importlib.util.spec_from_file_location("meshsender_module", os.path.join(os.path.dirname(os.path.abspath(__file__)), "meshsender.py"))
@@ -86,7 +88,6 @@ def capture_single_frame():
     try:
         # Capture current frame from camera
         frame = picam2.capture_array()
-        from PIL import Image
         return Image.fromarray(frame, 'RGB')
     except Exception as e:
         print(f"[X] Single frame capture error: {e}")
@@ -98,8 +99,6 @@ def create_4frame_grid(frames):
     frames: list of 4 PIL Images
     Returns: Single PIL Image with 2x2 grid layout
     """
-    from PIL import Image
-    
     if len(frames) != 4:
         raise ValueError("Expected 4 frames for grid")
     
@@ -136,9 +135,6 @@ def capture_4frame_motion_sequence():
         return False
     
     try:
-        from PIL import Image
-        import json
-        
         print("[*] Capturing 4-frame motion sequence...")
         frames = []
         
@@ -204,8 +200,6 @@ def capture_full_resolution_frame():
         
         # For speed, just use PIL to resize and save the buffered frame
         # This avoids starting a new camera instance
-        from PIL import Image
-        import json
         
         # Convert buffered RGB frame to PIL Image
         frame_pil = Image.fromarray(frame_buffer, 'RGB')
